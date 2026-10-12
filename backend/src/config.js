@@ -42,6 +42,7 @@ function loadSecrets(env = process.env) {
     dir,
     deepgramKey: env.DEEPGRAM_API_KEY || readSecret(dir, 'Deepgram_api.txt'),
     llmKey: env.SECONDSHIFT_LLM_KEY || readSecret(dir, 'secondshift_llm_key.txt'),
+    twilioAccountSid: env.TWILIO_ACCOUNT_SID || readSecret(dir, 'twilio_account_sid.txt'),
     twilioAuthToken: env.TWILIO_AUTH_TOKEN || readSecret(dir, 'twilio_auth_token.txt'),
     googleTokenFile: env.SECONDSHIFT_GOOGLE_TOKEN || path.join(dir, 'secondshift_google_oauth.json'),
   };

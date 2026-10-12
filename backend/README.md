@@ -25,7 +25,7 @@ Default dir `C:\Users\scott\secrets` (override `SECONDSHIFT_SECRETS_DIR`):
 | `Deepgram_api.txt` | STT + TTS | present, verified |
 | `secondshift_google_oauth.json` | Calendar + Gmail | created by `node tools/google-auth.js` after Scott's consent |
 | `secondshift_llm_key.txt` (+ `SECONDSHIFT_LLM_PROVIDER/MODEL/BASE_URL`) | optional LLM | not present (rules-only works) |
-| `twilio_auth_token.txt` | webhook signature check | optional; not present |
+| `twilio_account_sid.txt` + `twilio_auth_token.txt` | wiring an existing number (`tools/twilio-wire.js`) + webhook signature check | not present yet |
 
 ## Run / test
 ```
@@ -35,6 +35,14 @@ node test/e2e-sim.js emergency
 npm start                 # PORT=8790; needs a public https URL (PUBLIC_BASE_URL) for Twilio
 ```
 `/health` reports which modules are live vs falling back.
+
+## Wiring an existing Twilio number (no purchase)
+```
+node tools/twilio-wire.js list                                   # numbers + current voice webhooks
+node tools/twilio-wire.js wire +1XXXXXXXXXX https://<public-host>   # VoiceUrl -> /voice/twilio?tenant=carborundum
+node tools/twilio-wire.js unwire +1XXXXXXXXXX <previous-url>         # restore
+```
+`wire` prints the previous webhook first so it can be restored.
 
 ## Status (2026-10-12)
 - **Verified:** simulated Twilio call end-to-end (real Deepgram STT/TTS) books correctly and emails the owner; emergency → `<Dial>` transfer; transcript-only storage.
