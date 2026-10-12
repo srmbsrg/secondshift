@@ -43,6 +43,9 @@ function rules(text, expecting, ctx) {
     if (issue.split(/\s+/).length >= 2) out.issue = issue.charAt(0).toUpperCase() + issue.slice(1);
   }
   if (expecting === 'name') { const n = cleanName(t); if (n) out.name = n; }
+  // A name volunteered before we asked ("my name is Scott Murphy"). Needs the transcript's capitals,
+  // so "this is urgent" is not a name.
+  if (expecting !== 'name') { const m = t.match(/\b(?:[Mm]y name is|[Mm]y name's|[Nn]ame is|[Tt]his is)\s+([A-Z][a-z'-]+(?:\s+[A-Z][a-z'-]+)?)/); if (m) out.name = m[1]; }
   if (expecting === 'address') { const a = cleanAddress(t); if (a) out.address = a; }
   return out;
 }

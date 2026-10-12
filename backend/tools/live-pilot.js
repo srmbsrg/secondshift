@@ -95,7 +95,9 @@ async function main() {
   if (arg === '--restore') return restore(secrets);
   if (!secrets.deepgramKey) throw new Error('Deepgram key missing');
   if (!haveTwilio && arg !== '--dry') throw new Error(`Twilio API creds not found. Save twilio_account_sid.txt (AC...) and twilio_auth_token.txt in ${secrets.dir}, or run with --dry.`);
-  if (fs.existsSync(PREV) && haveTwilio) { console.log('[pilot] found a wiring from an earlier run; restoring it first'); await restore(secrets); }
+  // A restart keeps the ORIGINAL saved config (from before the first wiring) and simply re-points the
+  // number at the new tunnel, so the line never flips back mid-pilot. --restore puts the original back.
+  if (fs.existsSync(PREV)) console.log('[pilot] keeping the original saved config from ' + JSON.parse(fs.readFileSync(PREV, 'utf8')).savedAt);
   if (!fs.existsSync(CLOUDFLARED)) throw new Error('cloudflared not found at ' + CLOUDFLARED);
 
   const pub = await startTunnel(); console.log('[pilot] tunnel:', pub);
@@ -117,8 +119,8 @@ async function main() {
   if (!n) throw new Error(`${arg} is not on this account`);
   if (n.trunk_sid) throw new Error(`${arg} is on a SIP trunk; its voice URL is ignored. Pick another number.`);
   fs.mkdirSync(path.dirname(PREV), { recursive: true });
-  fs.writeFileSync(PREV, JSON.stringify({ sid: n.sid, phone_number: n.phone_number, voice_url: n.voice_url, voice_method: n.voice_method, voice_application_sid: n.voice_application_sid, voice_fallback_url: n.voice_fallback_url, savedAt: new Date().toISOString() }, null, 2));
-  console.log(`[pilot] saved previous config of ${arg} to ${PREV}`);
+  if (!fs.existsSync(PREV)) fs.writeFileSync(PREV, JSON.stringify({ sid: n.sid, phone_number: n.phone_number, voice_url: n.voice_url, voice_method: n.voice_method, voice_application_sid: n.voice_application_sid, voice_fallback_url: n.voice_fallback_url, savedAt: new Date().toISOString() }, null, 2));
+  console.log(`[pilot] original config of ${arg} is saved in ${PREV}`);
   const u = await api(secrets.twilioAccountSid, secrets.twilioAuthToken, `/IncomingPhoneNumbers/${n.sid}.json`, { VoiceUrl: `${pub}/voice/twilio?tenant=${TENANT}`, VoiceMethod: 'POST', VoiceApplicationSid: '' });
   console.log(`[pilot] ${u.phone_number} -> ${u.voice_url}`);
   console.log(`\n[pilot] READY. Call ${u.phone_number} now. Ctrl+C (or --restore) puts the old setting back.\n`);

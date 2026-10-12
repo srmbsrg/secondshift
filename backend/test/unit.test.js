@@ -108,3 +108,38 @@ test('understand: model output must be grounded in what the caller said', async 
   const v = await understand('this is Jordan Avery at 1412 Willow Bend, my AC is out', 'issue', { now: NOW, tz: TZ, emergencyKeywords: [], llm: goodLlm });
   assert.equal(v.name, 'Jordan Avery'); assert.equal(v.address, '1412 Willow Bend');
 });
+
+test('agent: voicemail-style first sentence (live pilot call 1) keeps name, number and day', async () => {
+  const sch = fakeScheduler(tenant);
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
+  let r = await a.onUtterance('I need a plumber out here tomorrow. Phone number is (903) 474-7930. My name is Scott Murphy. Please call me at your earliest convenience. Thank you.');
+  assert.match(r.say, /Thanks, Scott\. What’s the address/);
+  r = await a.onUtterance('22 Oak Street in Tyler.');
+  assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM/); // no name, number or day questions
+  r = await a.onUtterance('yes'); assert.equal(a.outcome, 'booked');
+  assert.deepEqual([sch.booked[0].name, sch.booked[0].phone], ['Scott Murphy', '9034747930']);
+});
+
+test('session: caller hangs up while the agent is talking -> call log + owner email still written', async () => {
+  const { EventEmitter } = require('events');
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const { CallSession } = require('../src/call/session');
+  const twilio = require('../src/phone/twilio');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-sess-'));
+  const conn = new EventEmitter(); conn.send = () => {}; conn.close = () => {};
+  const stt = new EventEmitter(); stt.send = () => {}; stt.close = () => {};
+  const mails = []; let rec = null;
+  new CallSession({ conn, provider: twilio, tenants: { carborundum: { ...tenant, id: 'carborundum' } }, deps: {
+    now: () => NOW, openStt: () => stt, tts: { speak: async () => Buffer.alloc(160, 0xff) },
+    calendar: { kind: 'test', busy: async () => [], create: async () => ({ id: 'x' }) },
+    mailer: { kind: 'test', send: async m => { mails.push(m); } }, logDir: dir, onRecord: r => { rec = r; } } });
+  conn.emit('message', JSON.stringify({ event: 'start', streamSid: 'MZ1', start: { streamSid: 'MZ1', callSid: 'CA1', customParameters: { tenant: 'carborundum', from: '+19034747930', callSid: 'CA1' } } }));
+  await new Promise(r => setTimeout(r, 20));
+  stt.emit('utterance', 'my furnace is making a loud banging noise'); // agent replies, no playback mark ever comes back
+  await new Promise(r => setTimeout(r, 20));
+  conn.emit('error', new Error('read ECONNRESET')); conn.emit('close');
+  for (let i = 0; i < 100 && !rec; i++) await new Promise(r => setTimeout(r, 20));
+  assert.ok(rec, 'call record written'); assert.equal(rec.transcript.filter(l => l.who === 'caller').length, 1);
+  assert.ok(fs.readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').includes('furnace'));
+  assert.equal(mails.length, 1);
+});

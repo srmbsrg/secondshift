@@ -81,6 +81,7 @@ class BookingAgent {
     // Fill anything the caller gave us, then handle the field we asked for.
     for (const k of ['issue', 'name', 'address']) if (u[k] && !this.slots[k]) this.slots[k] = u[k];
     if (u.when && !this.slots.when && this.state !== 'confirm') this.slots.when = u.when;
+    if (u.phone && !this.slots.phone && this.state !== 'phone') this.slots.phone = u.phone; // number volunteered early
 
     switch (this.state) {
       case 'issue':

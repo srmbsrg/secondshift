@@ -32,6 +32,13 @@ const SCENARIOS = {
   },
 };
 
+// Signs requests like Twilio does when an auth token is configured (the server then enforces it).
+const crypto = require('crypto');
+function twilioPost(secrets, url, params) {
+  const headers = { 'content-type': 'application/x-www-form-urlencoded' };
+  if (secrets.twilioAuthToken) headers['x-twilio-signature'] = crypto.createHmac('sha1', secrets.twilioAuthToken).update(url + Object.keys(params).sort().map(k => k + params[k]).join('')).digest('base64');
+  return fetch(url, { method: 'POST', headers, body: new URLSearchParams(params) });
+}
 const SILENCE = Buffer.alloc(160, 0xff); // 20 ms of mu-law silence
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -53,7 +60,7 @@ async function main() {
 
   // 1) Twilio webhook: an inbound call arrives.
   const callSid = 'CA' + Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32), from = '+17135550148';
-  const twiml = await (await fetch(base + '/voice/twilio', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ CallSid: callSid, From: from, To: '+18325550000' }) })).text();
+  const twiml = await (await twilioPost(secrets, base + '/voice/twilio', { CallSid: callSid, From: from, To: '+18325550000' })).text();
   if (!/<Connect><Stream url="ws:\/\/127\.0\.0\.1:\d+\/media\/twilio">/.test(twiml) || !/<Redirect/.test(twiml)) throw new Error('bad TwiML: ' + twiml);
   console.log('[sim] TwiML ok (Connect/Stream + Redirect to /voice/twilio/after)');
 
@@ -102,7 +109,7 @@ async function main() {
   clearInterval(ticker);
 
   // 4) Twilio follows the <Redirect> after the stream ends.
-  const after = await (await fetch(`${base}/voice/twilio/after?tenant=carborundum`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ CallSid: callSid }) })).text();
+  const after = await (await twilioPost(secrets, `${base}/voice/twilio/after?tenant=carborundum`, { CallSid: callSid })).text();
   for (let i = 0; i < 50 && !records.length; i++) await sleep(100);
   const rec = records[0];
   server.close();

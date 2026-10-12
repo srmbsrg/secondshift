@@ -64,6 +64,7 @@ class CallSession {
     this.transcript.push({ at: this._t(), who: 'agent', text }); live(this.callSid, 'agent', text);
     let audio;
     try { audio = await this.deps.tts.speak(text); } catch (e) { this._log('error', 'tts: ' + e.message); return; }
+    if (this.closed) return;
     const mark = `say-${++this.markSeq}`;
     await new Promise(done => {
       this.speaking = { mark, done };
@@ -88,7 +89,10 @@ class CallSession {
     if (this.closed) return; this.closed = true;
     clearTimeout(this.maxTimer);
     if (this.stt) this.stt.close();
-    try { await this.queue; } catch {}
+    // Caller hung up mid-sentence: no playback mark will ever arrive, so release the pending line
+    // or the turn queue (and with it the call log + owner email) waits forever.
+    if (this.speaking) { const sp = this.speaking; this.speaking = null; sp.done(); }
+    try { await Promise.race([this.queue, new Promise(r => setTimeout(r, 5000))]); } catch {}
     if (!this.agent) return;
     const sum = this.agent.summary();
     const endAction = this.endAction || 'hangup';
