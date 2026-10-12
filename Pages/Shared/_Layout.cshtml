@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="SecondShift — the AI voice agent that answers your shop's missed calls in seconds and books the job straight into your calendar. Your second shift that never sleeps." />
+    <title>@ViewData["Title"] - SecondShift</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+    <header class="site-header">
+        <div class="wrap header-inner">
+            <a class="brand" asp-page="/Index">
+                <span class="brand-mark" aria-hidden="true"></span>
+                <span class="brand-name">SECONDSHIFT</span>
+            </a>
+            <nav class="site-nav">
+                <a href="#how">How it works</a>
+                <a href="#demo">Live demo</a>
+                <a href="#pricing">Pricing</a>
+                <a href="#faq">FAQ</a>
+            </nav>
+            <a class="btn btn-primary btn-sm" href="https://www.carborundum.ai/">Book a walkthrough</a>
+        </div>
+    </header>
+
+    <main role="main">
+        @RenderBody()
+    </main>
+
+    <footer class="site-footer">
+        <div class="wrap footer-inner">
+            <div>
+                <div class="brand-name">SECONDSHIFT</div>
+                <p class="muted">Your second shift that never sleeps.<br />A Carborundum AI product.</p>
+            </div>
+            <div class="footer-links">
+                <a href="https://www.carborundum.ai/">carborundum.ai</a>
+                <a asp-page="/Privacy">Privacy</a>
+            </div>
+        </div>
+        <div class="wrap footer-base muted">&copy; 2026 Carborundum AI. All rights reserved.</div>
+    </footer>
+
+    <script src="~/js/site.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

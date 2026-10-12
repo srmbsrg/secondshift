@@ -1,0 +1,196 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "Your second shift that never sleeps";
+}
+
+<!-- HERO -->
+<section class="hero">
+    <div class="wrap">
+        <span class="eyebrow">For HVAC, plumbing, electrical &amp; roofing shops</span>
+        <h1>Your second shift<br />that <span class="accent">never sleeps.</span></h1>
+        <p class="lede">SecondShift answers your missed calls in seconds and books the job straight into your calendar — nights, weekends, holidays. No more jobs lost to voicemail.</p>
+        <div class="hero-cta">
+            <a class="btn btn-primary" href="https://www.carborundum.ai/">Book a walkthrough</a>
+            <a class="btn btn-ghost" href="#demo">See it in action</a>
+        </div>
+        <div class="hero-video">
+            <video controls preload="metadata" poster="">
+                <source src="~/media/secondshift-promo-v1.mp4" type="video/mp4" />
+                Your browser does not support the video tag.
+            </video>
+            <p class="video-caption muted">Watch: what happens when a $3,000 job calls at 9:30 PM.</p>
+        </div>
+    </div>
+</section>
+
+<!-- THE PROBLEM -->
+<section class="block band" id="problem">
+    <div class="wrap">
+        <div class="section-head">
+            <span class="eyebrow">The problem</span>
+            <h2>Every missed call is a job walking to your competitor.</h2>
+        </div>
+        <div class="story">
+            <p class="big">It&rsquo;s 9:30 at night. Your phone rings. You&rsquo;re on the couch &mdash; and a $3,000 job just went to voicemail.</p>
+            <p class="muted">By morning, they&rsquo;ve called the next shop on the list. Nobody means to miss it. You were eating dinner. You were on another job. You were asleep. The phone doesn&rsquo;t care &mdash; it just keeps ringing, and every ring you miss is money you&rsquo;ll never see.</p>
+        </div>
+    </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="block" id="how">
+    <div class="wrap">
+        <div class="section-head">
+            <span class="eyebrow">How it works</span>
+            <h2>Three steps. Zero missed jobs.</h2>
+            <p>No new software to learn. No hardware to install. SecondShift picks up the calls you can&rsquo;t.</p>
+        </div>
+        <div class="steps">
+            <div class="step">
+                <div class="step-num">1</div>
+                <h3>We answer in seconds</h3>
+                <p>When you can&rsquo;t pick up &mdash; after hours, on a job, on another call &mdash; SecondShift answers like a member of your team, every time.</p>
+            </div>
+            <div class="step">
+                <div class="step-num">2</div>
+                <h3>We talk, we qualify, we book</h3>
+                <p>It has a real conversation: what&rsquo;s wrong, where are you, when works for you. Then it books the job on the spot.</p>
+            </div>
+            <div class="step">
+                <div class="step-num">3</div>
+                <h3>It lands in your calendar</h3>
+                <p>The job shows up in the calendar you already use, with the customer&rsquo;s name, address, and what they need. You just show up and do the work.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- FEATURES -->
+<section class="block band" id="features">
+    <div class="wrap">
+        <div class="section-head">
+            <span class="eyebrow">What you get</span>
+            <h2>Built for shops, not call centers.</h2>
+        </div>
+        <div class="features">
+            <div class="feature">
+                <h3><span class="tick">&#10003;</span>After-hours answering</h3>
+                <p>Nights, weekends, holidays &mdash; whenever your crew is off the clock, SecondShift is on it.</p>
+            </div>
+            <div class="feature">
+                <h3><span class="tick">&#10003;</span>Books straight into your calendar</h3>
+                <p>No sticky notes, no &ldquo;I&rsquo;ll call them back tomorrow.&rdquo; The job is scheduled before you even see it.</p>
+            </div>
+            <div class="feature">
+                <h3><span class="tick">&#10003;</span>Sounds like a real person</h3>
+                <p>Callers talk to a natural voice, not a phone tree. Press 1 for nothing &mdash; they just talk.</p>
+            </div>
+            <div class="feature">
+                <h3><span class="tick">&#10003;</span>Plain-English setup</h3>
+                <p>Tell us your services, your hours, and your calendar. We handle the rest. No tech skills needed.</p>
+            </div>
+            <div class="feature">
+                <h3><span class="tick">&#10003;</span>Emergencies go to you first</h3>
+                <p>You set the rules. Burst pipe at 2 AM? It can ring you immediately instead of booking.</p>
+            </div>
+            <div class="feature">
+                <h3><span class="tick">&#10003;</span>You stay in control</h3>
+                <p>Review every booking. Change the rules anytime. It works for you &mdash; not the other way around.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- INTERACTIVE DEMO -->
+<section class="block" id="demo">
+    <div class="wrap">
+        <div class="section-head">
+            <span class="eyebrow">Live demo</span>
+            <h2>Watch a missed call become a booked job.</h2>
+        </div>
+        <div class="demo-shell">
+            <div class="demo-copy">
+                <p>This is a simulation of what your callers hear. Hit the button and watch SecondShift greet the caller, get the details, and book the job &mdash; the same way it would at 9:30 PM on a Saturday.</p>
+                <p>No real call is placed. Nothing leaves your browser.</p>
+            </div>
+            <div class="phone">
+                <div class="phone-screen">
+                    <div class="call-bar">
+                        <div class="caller">(713) 555-0148</div>
+                        <div class="call-state" id="demo-call-state">Ready</div>
+                    </div>
+                    <div class="transcript" id="demo-transcript"></div>
+                    <div class="demo-controls" id="demo-controls">
+                        <button class="btn btn-primary" id="demo-start">Simulate a missed call</button>
+                        <p class="demo-note">Simulated conversation &mdash; no real call was placed.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- PRICING -->
+<section class="block band" id="pricing">
+    <div class="wrap">
+        <div class="section-head" style="text-align:center; margin-left:auto; margin-right:auto;">
+            <span class="eyebrow">Pricing</span>
+            <h2>Simple. One plan.</h2>
+        </div>
+        <div class="pricing-card">
+            @* DRAFT PRICING — NOT FINAL. Scott must confirm before this goes live. See BUILD_NOTES.md. *@
+            <span class="draft-flag">Draft pricing &mdash; not final</span>
+            <h3>SecondShift</h3>
+            <div class="price">$500<span>/month</span></div>
+            <p class="muted">Start with a free trial. Cancel anytime.</p>
+            <ul>
+                <li>After-hours call answering, 24/7</li>
+                <li>Books jobs straight into your calendar</li>
+                <li>Emergency rules you control</li>
+                <li>Plain-English setup &mdash; we do it with you</li>
+            </ul>
+            <a class="btn btn-primary" href="https://www.carborundum.ai/">Book a walkthrough</a>
+        </div>
+    </div>
+</section>
+
+<!-- FAQ -->
+<section class="block" id="faq">
+    <div class="wrap">
+        <div class="section-head">
+            <span class="eyebrow">FAQ</span>
+            <h2>Straight answers.</h2>
+        </div>
+        <div class="faq-item">
+            <h3>Does this replace my office staff?</h3>
+            <p>No. It covers the calls your staff can&rsquo;t take &mdash; after hours, when the line&rsquo;s busy, when everyone&rsquo;s on a job. Your team still runs the day.</p>
+        </div>
+        <div class="faq-item">
+            <h3>What if a caller has a real emergency?</h3>
+            <p>You set the rules up front. Emergencies can ring your phone immediately, go to your on-call tech, or get booked first thing in the morning &mdash; your call.</p>
+        </div>
+        <div class="faq-item">
+            <h3>Which calendar does it work with?</h3>
+            <p>The one you already use. It connects to common calendars and scheduling tools &mdash; we&rsquo;ll confirm yours on the walkthrough.</p>
+        </div>
+        <div class="faq-item">
+            <h3>How long does setup take?</h3>
+            <p>One conversation. You tell us your services, hours, and how you like jobs booked, and we set it up with you. No tech skills needed on your end.</p>
+        </div>
+        <div class="faq-item">
+            <h3>What does it cost?</h3>
+            <p>There&rsquo;s a free trial to start. After that, one flat monthly plan &mdash; final pricing is being set now, so book a walkthrough and we&rsquo;ll talk numbers.</p>
+        </div>
+    </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="final-cta band">
+    <div class="wrap">
+        <span class="eyebrow">Stop losing jobs to voicemail</span>
+        <h2>Put your second shift to work.</h2>
+        <p>See exactly how SecondShift would answer for your shop. Fifteen minutes, no pressure, no tech talk.</p>
+        <a class="btn btn-primary" href="https://www.carborundum.ai/">Book a walkthrough</a>
+    </div>
+</section>
