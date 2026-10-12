@@ -57,9 +57,8 @@ test('agent: full booking conversation (rules only, no LLM)', async () => {
   let r = await a.onUtterance('Hi, my air conditioner stopped working and it is really hot in here.');
   assert.match(r.say, /name/);
   r = await a.onUtterance('Jordan Avery.'); assert.match(r.say, /address/);
-  r = await a.onUtterance('1412 Willow Bend Drive in Spring.'); assert.match(r.say, /7 1 3, 5 5 5, 0 1 4 8/);
-  r = await a.onUtterance("Yes, that's the best number."); assert.match(r.say, /When/);
-  r = await a.onUtterance('Tomorrow morning if you can.'); assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM\. Does that work\?/);
+  r = await a.onUtterance('1412 Willow Bend Drive in Spring.'); assert.match(r.say, /When/); // caller ID is the callback number: not asked
+  r = await a.onUtterance('Tomorrow morning if you can.'); assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM, and we’ll call you at the number you’re calling from\. Does that work\?/);
   r = await a.onUtterance('Yes, that works.'); assert.equal(r.end, 'hangup'); assert.match(r.say, /all set/);
   assert.equal(sch.booked.length, 1);
   const b = sch.booked[0];
@@ -70,7 +69,7 @@ test('agent: full booking conversation (rules only, no LLM)', async () => {
 test('agent: rejecting the slot re-asks and books a later one', async () => {
   const sch = fakeScheduler(tenant);
   const a = new BookingAgent({ tenant, callerNumber: '+17135550148', scheduler: sch, now: () => NOW });
-  for (const u of ['my water heater is leaking', 'Sam Lee', '22 Oak Street', 'yes', 'tomorrow morning']) await a.onUtterance(u);
+  for (const u of ['my water heater is leaking', 'Sam Lee', '22 Oak Street', 'tomorrow morning']) await a.onUtterance(u);
   let r = await a.onUtterance('no, that does not work'); assert.match(r.say, /work better/);
   r = await a.onUtterance('Wednesday afternoon'); assert.match(r.say, /Wednesday, October 14 at 12 PM/);
   r = await a.onUtterance('yes'); assert.equal(a.outcome, 'booked');
@@ -88,7 +87,7 @@ test('agent: emergency with NO transfer number -> earliest slot, flagged urgent'
   const a = new BookingAgent({ tenant, callerNumber: '+17135550148', scheduler: sch, now: () => NOW });
   let r = await a.onUtterance('there is a burst pipe and water everywhere');
   assert.ok(!r.end); assert.match(r.say, /name/);
-  for (const u of ['Pat Kim', '9 Elm Court', 'yes']) r = await a.onUtterance(u);
+  for (const u of ['Pat Kim', '9 Elm Court']) r = await a.onUtterance(u);
   assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM/); // no "when" question: ASAP
   r = await a.onUtterance('yes please'); assert.equal(a.outcome, 'booked'); assert.ok(sch.booked[0].emergency);
 });
@@ -184,4 +183,129 @@ test('agent + model: one-breath voicemail-style message -> only the missing ques
   r = await a.onUtterance('Yep, that works.'); assert.equal(a.outcome, 'booked');
   const b = sch.booked[0];
   assert.deepEqual([b.issue, b.name, b.phone, b.address], ['Kitchen sink is backed up', 'Scott Murphy', '9034747930', '22 Oak Street']);
+});
+
+test('agent: live call 2 replay -> no phone question, address must be real, repeated time = agreement', async () => {
+  const sch = fakeScheduler(tenant);
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
+  let r = await a.onUtterance('Yeah. My name is Scott Mercer. We have a backed up toilet.');
+  assert.match(r.say, /address/);
+  r = await a.onUtterance('Need someone to come out and take a look at it.');
+  assert.match(r.say, /street address, with the house number/); // not accepted as an address, no jump to phone
+  r = await a.onUtterance('1412');
+  assert.match(r.say, /1412 — and what’s the street name/);
+  r = await a.onUtterance('Willow Bend Drive.');
+  assert.match(r.say, /When would you like/); // caller ID used, phone never asked
+  r = await a.onUtterance('Tomorrow morning.');
+  assert.match(r.say, /8 AM, and we’ll call you at the number you’re calling from\. Does that work/);
+  r = await a.onUtterance('Tomorrow morning.');
+  assert.match(r.say, /Great — that’s Tuesday, October 13 at 8 AM\. Shall I book it/);
+  r = await a.onUtterance('Yes.'); assert.equal(a.outcome, 'booked');
+  assert.deepEqual([sch.booked[0].address, sch.booked[0].phone], ['1412 Willow Bend Drive', '9034747930']);
+});
+
+test('agent: a different number said at the offer replaces the caller ID', async () => {
+  const sch = fakeScheduler(tenant);
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
+  for (const u of ['my dryer vent is clogged', 'Ana Ruiz', '7 Pine Lane', 'tomorrow morning']) await a.onUtterance(u);
+  const r = await a.onUtterance('call my cell instead, 832 555 0199');
+  assert.match(r.say, /Got it, I’ll use that number\..*Does that work/);
+  assert.ok(!/number you’re calling from/.test(r.say));
+  await a.onUtterance('yes'); assert.equal(sch.booked[0].phone, '8325550199');
+});
+
+test('stt: a pause mid-thought does not end the turn; finished sentence does', async () => {
+  const { openDeepgramStream, UNFINISHED } = require('../src/brain/stt-deepgram');
+  assert.ok(UNFINISHED.test('my address is 1412')); assert.ok(UNFINISHED.test('the toilet and')); assert.ok(!UNFINISHED.test('We have a backed up toilet.'));
+  let sock = null;
+  const Real = global.WebSocket;
+  global.WebSocket = class { constructor() { sock = this; this.l = {}; } addEventListener(t, f) { (this.l[t] = this.l[t] || []).push(f); } send() {} close() {} };
+  try {
+    const stt = openDeepgramStream({ apiKey: 'k', holdMs: 120, unfinishedHoldMs: 400 });
+    const got = []; stt.on('utterance', t => got.push(t));
+    const fire = m => sock.l.message.forEach(f => f({ data: JSON.stringify(m) }));
+    const res = (text, fin, sf) => fire({ type: 'Results', is_final: fin, speech_final: sf, channel: { alternatives: [{ transcript: text }] } });
+    sock.l.open.forEach(f => f());
+    res('My name is Scott. We have a backed up toilet.', true, true);
+    await new Promise(r => setTimeout(r, 60)); res('need someone', false, false); // keeps talking inside the hold
+    res('Need someone to come out.', true, true);
+    await new Promise(r => setTimeout(r, 200));
+    assert.deepEqual(got, ['My name is Scott. We have a backed up toilet. Need someone to come out.']);
+    res('It is 1412', true, true); // unfinished: longer hold
+    await new Promise(r => setTimeout(r, 200)); assert.equal(got.length, 1);
+    res('Willow Bend Drive.', true, true);
+    await new Promise(r => setTimeout(r, 200));
+    assert.equal(got[1], 'It is 1412 Willow Bend Drive.');
+    sock.l.close.forEach(f => f({ code: 1000 })); // stops the keep-alive timer
+  } finally { global.WebSocket = Real; }
+});
+
+test('understand + agent: address in pieces, Deepgram "$14.12" house number, street first', async () => {
+  const sch = fakeScheduler(tenant);
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
+  for (const u of ['my toilet is backed up', 'Scott Murphy']) await a.onUtterance(u);
+  let r = await a.onUtterance('Yeah. It is $14.12.'); assert.match(r.say, /1412 — and what’s the street name/);
+  r = await a.onUtterance('Willow Bend Drive in Spring.'); assert.match(r.say, /When would you like/);
+  assert.equal(a.slots.address, '1412 Willow Bend Drive in Spring');
+  const b = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: fakeScheduler(tenant), now: () => NOW });
+  for (const u of ['my toilet is backed up', 'Scott Murphy']) await b.onUtterance(u);
+  r = await b.onUtterance('Willow Bend Drive.'); assert.match(r.say, /house number on Willow Bend Drive/);
+  r = await b.onUtterance('1412.'); assert.match(r.say, /When would you like/);
+  assert.equal(b.slots.address, '1412 Willow Bend Drive');
+});
+
+test('session: caller keeps talking while the reply is being prepared -> reply dropped, both parts one turn', async () => {
+  const { EventEmitter } = require('events');
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const { CallSession } = require('../src/call/session');
+  const twilio = require('../src/phone/twilio');
+  const conn = new EventEmitter(); const sent = []; conn.send = m => sent.push(JSON.parse(m)); conn.close = () => {};
+  const stt = new EventEmitter(); stt.send = () => {}; stt.close = () => {};
+  let releaseTts; const slowTts = { speak: async t => { if (/address/.test(t) && !releaseTts) await new Promise(r => { releaseTts = r; }); return Buffer.alloc(160, 0xff); } };
+  const s = new CallSession({ conn, provider: twilio, tenants: { carborundum: { ...tenant, id: 'carborundum' } }, deps: {
+    now: () => NOW, openStt: () => stt, tts: slowTts, calendar: { kind: 't', busy: async () => [], create: async () => ({ id: 'x' }) },
+    mailer: { kind: 't', send: async () => {} }, logDir: fs.mkdtempSync(path.join(os.tmpdir(), 'ss-cont-')) } });
+  conn.emit('message', JSON.stringify({ event: 'start', streamSid: 'MZ1', start: { streamSid: 'MZ1', callSid: 'CA2', customParameters: { tenant: 'carborundum', from: '+19034747930', callSid: 'CA2' } } }));
+  await new Promise(r => setTimeout(r, 20));
+  conn.emit('message', JSON.stringify({ event: 'mark', streamSid: 'MZ1', mark: { name: 'say-1' } })); // greeting heard
+  stt.emit('utterance', 'Yeah. My name is Scott Murphy. We have a backed up toilet.');
+  await new Promise(r => setTimeout(r, 20));
+  stt.emit('speech-words', 'need someone to come'); // caller continues while the address question is being synthesized
+  releaseTts();
+  await new Promise(r => setTimeout(r, 20));
+  assert.ok(!s.transcript.some(l => l.who === 'agent' && /address/.test(l.text)), 'address question must not be played over the caller');
+  stt.emit('utterance', 'Need someone to come out and take a look at it.');
+  await new Promise(r => setTimeout(r, 50));
+  const callerLines = s.transcript.filter(l => l.who === 'caller').map(l => l.text);
+  assert.deepEqual(callerLines, ['Yeah. My name is Scott Murphy. We have a backed up toilet. Need someone to come out and take a look at it.']);
+  assert.match(s.transcript[s.transcript.length - 1].text, /address/);
+  assert.equal(s.agent.slots.name, 'Scott Murphy');
+  conn.emit('close');
+});
+
+test('understand: a model-proposed time must be grounded in what the caller said', async () => {
+  const { understand } = require('../src/brain/understand');
+  const llm = { async json() { return { when: 'as soon as possible', issue: 'toilet backed up' }; } };
+  const u = await understand('Need someone to come out and take a look at it.', 'address', { now: NOW, tz: TZ, emergencyKeywords: [], llm });
+  assert.equal(u.when, undefined);
+  const v = await understand('could somebody come as soon as possible', 'when', { now: NOW, tz: TZ, emergencyKeywords: [], llm });
+  assert.equal(v.when.asap, true);
+});
+
+test('understand: house numbers spoken as words', async () => {
+  const { understand } = require('../src/brain/understand');
+  const ctx = { now: NOW, tz: TZ, emergencyKeywords: [] };
+  assert.equal((await understand('Yeah. It is fourteen twelve.', 'address', ctx)).houseNumber, '1412');
+  assert.equal((await understand('one oh five Main Street', 'address', ctx)).address, '105 Main Street');
+  assert.equal((await understand('twenty two Oak Street in Tyler', 'address', ctx)).address, '22 Oak Street in Tyler');
+  assert.equal((await understand('Need someone to come out and take a look at it.', 'address', ctx)).address, undefined);
+});
+
+test('agent: the town arriving as its own fragment joins the address', async () => {
+  for (const [addr, frag, want] of [['1412 Willow Bend Drive', 'In Spring.', '1412 Willow Bend Drive in Spring'], ['1412 Willow Bend Drive in', 'Spring.', '1412 Willow Bend Drive in Spring']]) {
+    const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: fakeScheduler(tenant), now: () => NOW });
+    for (const u of ['my toilet is backed up', 'Scott Murphy', addr]) await a.onUtterance(u);
+    const r = await a.onUtterance(frag);
+    assert.match(r.say, /When would you like/); assert.equal(a.slots.address, want);
+  }
 });

@@ -19,7 +19,6 @@ const SCENARIOS = {
       "Hi, my air conditioner stopped working and it's really hot in the house.",
       'Jordan Avery.',
       '1412 Willow Bend Drive in Spring.',
-      "Yes, that's the best number.",
       'Tomorrow morning if you can.',
       'Yes, that works.',
     ],
@@ -33,6 +32,19 @@ const SCENARIOS = {
       'Yes, that works.',
     ],
     expect: { outcome: 'booked', after: '<Hangup/>', slots: { name: /^Scott Murphy$/, address: /^22 Oak Street/i, phone: /^9034747930$/, issue: /sink/i } },
+  },
+  // Live call 2's shape: the caller pauses mid-thought, then reads the address out slowly with a
+  // pause after the house number. The agent must wait, never ask for the phone (caller ID), and
+  // capture the full street address.
+  slowaddress: {
+    pauseMs: 1100,
+    lines: [
+      ['Yeah, my name is Scott Murphy. We have a backed up toilet.', 'Need someone to come out and take a look at it.'],
+      ['Yeah, it is 1412', 'Willow Bend Drive, in Spring.'],
+      'Tomorrow morning.',
+      'Yes.',
+    ],
+    expect: { outcome: 'booked', after: '<Hangup/>', slots: { name: /^Scott Murphy$/, address: /^1412 \w+ Bend Drive,? in Spring$/i, phone: /^7135550148$/, issue: /^backed up toilet/i } },
   },
   emergency: {
     lines: ['I smell gas in my kitchen and I am really worried.'],
@@ -79,14 +91,21 @@ async function main() {
   // 2) Caller audio, synthesized once up front.
   const callerVoice = createTts({ apiKey: secrets.deepgramKey, model: 'aura-orion-en' });
   const callerAudio = [];
-  for (const l of sc.lines) callerAudio.push(await callerVoice.speak(l));
+  // A line can be an array: the parts are spoken with a natural mid-thought pause between them
+  // (PAUSE_MS of silence), like a caller reading out an address.
+  const PAUSE = Buffer.alloc(8 * (sc.pauseMs || 1100), 0xff);
+  for (const l of sc.lines) {
+    const parts = Array.isArray(l) ? l : [l]; const bufs = [];
+    for (const [i, p] of parts.entries()) { if (i) bufs.push(PAUSE); bufs.push(await callerVoice.speak(p)); }
+    callerAudio.push(Buffer.concat(bufs));
+  }
 
   // 3) Media stream, real time.
   const ws = new WebSocket(`ws://127.0.0.1:${port}/media/twilio`);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('ws connect failed')); });
   const streamSid = 'MZ' + callSid.slice(2);
   const t0 = Date.now(); let firstBotAudioAt = null;
-  let outQueue = []; let botBytes = 0; let lineIdx = 0; let closed = false; const turnLatencies = []; let lastCallerEndAt = null;
+  let clears = 0; let outQueue = []; let botBytes = 0; let lineIdx = 0; let closed = false; const turnLatencies = []; let lastCallerEndAt = null;
   const params = Object.fromEntries(new URL(twiml.match(/url="([^"]+)"/)[1]).searchParams); void params;
   ws.send(JSON.stringify({ event: 'connected', protocol: 'Call', version: '1.0.0' }));
   ws.send(JSON.stringify({ event: 'start', sequenceNumber: '1', start: { streamSid, callSid, accountSid: 'ACsim', tracks: ['inbound'], mediaFormat: { encoding: 'audio/x-mulaw', sampleRate: 8000, channels: 1 }, customParameters: { tenant: 'carborundum', from, callSid } }, streamSid }));
@@ -110,11 +129,15 @@ async function main() {
       if (firstBotAudioAt === null) firstBotAudioAt = Date.now() - t0;
       if (lastCallerEndAt && botBytes === 0) { turnLatencies.push(Date.now() - lastCallerEndAt); lastCallerEndAt = null; }
       botBytes += Buffer.from(m.media.payload, 'base64').length;
-    } else if (m.event === 'clear') { botBytes = 0; console.log('[sim] server sent clear (barge-in)'); }
+    } else if (m.event === 'clear') { botBytes = 0; clears++; console.log('[sim] server sent clear (barge-in)'); }
     else if (m.event === 'mark') {
-      const playMs = (botBytes / 8000) * 1000; botBytes = 0;
+      const playMs = (botBytes / 8000) * 1000; botBytes = 0; const clearsAtMark = clears;
       await sleep(playMs); // simulate the caller hearing the whole line
       ws.send(JSON.stringify({ event: 'mark', streamSid, mark: { name: m.mark.name } }));
+      // Like a real caller: answer only a line that was actually heard (not one cut off by a barge-in),
+      // and never start the next line while still talking.
+      if (clears !== clearsAtMark) return;
+      while (outQueue.length) await sleep(50);
       if (lineIdx < callerAudio.length) { await sleep(400); speakLine(callerAudio[lineIdx++]); }
     }
   };

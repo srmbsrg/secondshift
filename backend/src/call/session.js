@@ -42,32 +42,63 @@ class CallSession {
       scheduler: createScheduler({ tenant: this.tenant, calendar: this.deps.calendar, now, callerNumber: this.from }),
     });
     this.stt = this.deps.openStt({ model: (this.tenant.voice && this.tenant.voice.sttModel) || undefined });
-    this.stt.on('speech-started', () => { if (this.speaking) { this._send(this.provider.clear(this.streamSid)); const s = this.speaking; this.speaking = null; s.done(); this._log('barge-in'); } });
-    this.stt.on('utterance', text => { this.queue = this.queue.then(() => this._turn(text)).catch(e => this._log('error', e.message)); });
+    // Barge-in only on real words (2+), not on raw voice activity: line noise, breathing or an
+    // "mm-hm" used to cut the agent off mid-question (live call 2), leaving the caller confused.
+    this.wordsSeq = 0;
+    this.stt.on('speech-words', words => {
+      this.wordsSeq++;
+      if (this.speaking && words.split(/\s+/).length >= 2) { this._send(this.provider.clear(this.streamSid)); const s = this.speaking; this.speaking = null; s.done({ bargedAfterMs: Date.now() - s.startedAt }); this._log('barge-in', words); }
+    });
+    this.stt.on('utterance', text => { const seq = this.wordsSeq; this.queue = this.queue.then(() => this._turn(text, seq)).catch(e => this._log('error', e.message)); });
     this.stt.on('error', e => this._log('error', 'stt: ' + (e && e.message)));
     this.maxTimer = setTimeout(() => this._hangup('max-duration'), (this.tenant.maxCallSeconds || 300) * 1000);
     this._log('start', { from: this.from, tenant: this.tenant.id });
     await this._say(this.agent.greeting());
   }
 
-  async _turn(text) {
+  async _turn(text, seqAtUtterance = this.wordsSeq) {
     if (this.closed || this.endAction) return;
+    // A held-back first half of this turn (see below) is joined to what the caller said next.
+    if (this.carry) {
+      text = `${this.carry} ${text}`; this.carry = null;
+      const t = this.transcript;
+      while (t.length && t[t.length - 1].cut) t.pop();           // our reply that was cut off at once
+      if (t.length && t[t.length - 1].who === 'caller') t.pop(); // replaced by the merged line below
+    }
     this.transcript.push({ at: this._t(), who: 'caller', text }); live(this.callSid, 'caller', text);
+    const snap = this.agent.snapshot();
+    const t0 = Date.now();
     const r = await this.agent.onUtterance(text);
-    if (r.say) await this._say(r.say);
+    this.lastThinkMs = Date.now() - t0;
+    // If the caller kept talking while we worked out the reply, they had not finished: drop the
+    // reply (never speak over them), undo the step, and treat both parts as one turn (live call 2).
+    const stillTalking = () => !r.end && this.wordsSeq !== seqAtUtterance;
+    const spoke = r.say ? await this._say(r.say, stillTalking) : true;
+    // The caller talking over the first ~2 s of our reply is the same thing one beat later: they
+    // had not finished (live sim: "So my kitchen" / "sink is backed up..."). Undo and merge.
+    const cutEarly = spoke && spoke.bargedAfterMs !== undefined && spoke.bargedAfterMs < 2000 && !r.end;
+    if (spoke === false || cutEarly || (!r.say && stillTalking())) {
+      this.agent.restore(snap); this.carry = text;
+      if (cutEarly) { const last = this.transcript[this.transcript.length - 1]; if (last && last.who === 'agent') last.cut = true; }
+      this._log('continuation', text); return;
+    }
     if (r.end) this._hangup(r.end === 'transfer' ? 'transfer' : 'hangup');
   }
 
   /** Speak text; resolves when the carrier reports playback finished (mark) or on barge-in. */
-  async _say(text) {
+  /** Returns false (nothing played) if `abortIf()` turns true before playback starts. */
+  async _say(text, abortIf = () => false) {
     if (this.closed) return;
-    this.transcript.push({ at: this._t(), who: 'agent', text }); live(this.callSid, 'agent', text);
-    let audio;
+    if (abortIf()) return false;
+    let audio; const t1 = Date.now();
     try { audio = await this.deps.tts.speak(text); } catch (e) { this._log('error', 'tts: ' + e.message); return; }
     if (this.closed) return;
+    if (abortIf()) return false;
+    this.transcript.push({ at: this._t(), who: 'agent', text }); live(this.callSid, 'agent', text);
+    this._log('timing', { thinkMs: this.lastThinkMs || 0, ttsMs: Date.now() - t1 }); this.lastThinkMs = 0;
     const mark = `say-${++this.markSeq}`;
-    await new Promise(done => {
-      this.speaking = { mark, done };
+    return new Promise(done => {
+      this.speaking = { mark, done, startedAt: Date.now() };
       this._send(this.provider.audio(this.streamSid, audio));
       this._send(this.provider.mark(this.streamSid, mark));
     });
