@@ -44,6 +44,16 @@ node tools/twilio-wire.js unwire +1XXXXXXXXXX <previous-url>         # restore
 ```
 `wire` prints the previous webhook first so it can be restored.
 
+## Live pilot (one command)
+Needs cloudflared at `C:\Users\scott\tools\cloudflared\cloudflared.exe` (or `CLOUDFLARED=`), checksum- and signature-verified.
+```
+node tools/live-pilot.js --dry          # quick tunnel + server + signed fake call over the public URL; no Twilio changes
+node tools/live-pilot.js                # same, then list the account numbers
+node tools/live-pilot.js +1XXXXXXXXXX   # save the number's current voice config, point it at the tunnel, stay up with a live call trace
+node tools/live-pilot.js --restore      # put the saved config back (also automatic on Ctrl+C)
+```
+The server is started with `SECONDSHIFT_VERBOSE=1`, so each turn, the outcome, and the email result print live.
+
 ## Status (2026-10-12)
 - **Verified:** simulated Twilio call end-to-end (real Deepgram STT/TTS) books correctly and emails the owner; emergency → `<Dial>` transfer; transcript-only storage.
 - **Not yet verified:** a real phone call over Twilio (needs a public URL + a live number), Google Calendar / Gmail (needs consent), Twilio signature check.

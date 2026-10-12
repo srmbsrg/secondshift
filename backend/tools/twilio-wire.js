@@ -41,4 +41,5 @@ async function main() {
     console.log(`${u.phone_number} -> ${u.voice_url || '(none)'}`);
   } else throw new Error('commands: list | wire | unwire');
 }
-main().catch(e => { console.error(e.message); process.exit(1); });
+if (require.main === module) main().catch(e => { console.error(e.message); process.exit(1); });
+module.exports = { api };

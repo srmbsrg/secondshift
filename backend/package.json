@@ -10,6 +10,7 @@
     "test": "node --test test/unit.test.js",
     "e2e": "node test/e2e-sim.js",
     "twilio-wire": "node tools/twilio-wire.js",
+    "pilot": "node tools/live-pilot.js",
     "google-auth": "node tools/google-auth.js"
   },
   "dependencies": {}

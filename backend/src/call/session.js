@@ -1,4 +1,6 @@
 'use strict';
+// Live console trace for pilot calls (SECONDSHIFT_VERBOSE=1). Same content as the transcript log.
+const live = (sid, type, data) => { if (process.env.SECONDSHIFT_VERBOSE) console.log(`[call ${String(sid || '').slice(-6)}] ${type}${data === undefined ? '' : ' ' + (typeof data === 'string' ? data : JSON.stringify(data))}`); };
 // One live phone call: carrier media stream <-> Deepgram STT -> BookingAgent -> Deepgram TTS.
 // Phone manners from Tiny Paws: the disclosure greeting is pre-rendered so the first word is
 // immediate, and if the caller starts talking while we're speaking we stop (barge-in / "clear").
@@ -50,7 +52,7 @@ class CallSession {
 
   async _turn(text) {
     if (this.closed || this.endAction) return;
-    this.transcript.push({ at: this._t(), who: 'caller', text });
+    this.transcript.push({ at: this._t(), who: 'caller', text }); live(this.callSid, 'caller', text);
     const r = await this.agent.onUtterance(text);
     if (r.say) await this._say(r.say);
     if (r.end) this._hangup(r.end === 'transfer' ? 'transfer' : 'hangup');
@@ -59,7 +61,7 @@ class CallSession {
   /** Speak text; resolves when the carrier reports playback finished (mark) or on barge-in. */
   async _say(text) {
     if (this.closed) return;
-    this.transcript.push({ at: this._t(), who: 'agent', text });
+    this.transcript.push({ at: this._t(), who: 'agent', text }); live(this.callSid, 'agent', text);
     let audio;
     try { audio = await this.deps.tts.speak(text); } catch (e) { this._log('error', 'tts: ' + e.message); return; }
     const mark = `say-${++this.markSeq}`;
@@ -80,7 +82,7 @@ class CallSession {
   }
 
   _t() { return Date.now() - this.startedAt.getTime(); }
-  _log(type, data) { (this.events || (this.events = [])).push({ at: this._t(), type, data }); }
+  _log(type, data) { (this.events || (this.events = [])).push({ at: this._t(), type, data }); live(this.callSid, type, data); }
 
   async _finish(reason) {
     if (this.closed) return; this.closed = true;
@@ -103,7 +105,8 @@ class CallSession {
     const dir = this.deps.logDir; fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify(rec) + '\n');
     if (rec.storeAudio && this.audioIn.length) fs.writeFileSync(path.join(dir, `${this.callSid}-caller.wav`), encodeWavMulaw(Buffer.concat(this.audioIn)));
-    try { await this._email(rec); } catch (e) { fs.appendFileSync(path.join(dir, 'errors.log'), `${new Date().toISOString()} email: ${e.message}\n`); }
+    live(this.callSid, 'END', { outcome: rec.outcome, endAction, booking: rec.booking && rec.booking.when, calendar: rec.booking && rec.booking.calendar });
+    try { await this._email(rec); live(this.callSid, 'email', 'sent'); } catch (e) { live(this.callSid, 'email', 'FAILED: ' + e.message); fs.appendFileSync(path.join(dir, 'errors.log'), `${new Date().toISOString()} email: ${e.message}\n`); }
     this.record = rec;
     if (this.deps.onRecord) this.deps.onRecord(rec);
   }
