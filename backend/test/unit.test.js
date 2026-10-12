@@ -309,3 +309,28 @@ test('agent: the town arriving as its own fragment joins the address', async () 
     assert.match(r.say, /When would you like/); assert.equal(a.slots.address, want);
   }
 });
+
+test('leads: stored first, then Telegram + email; validation, honeypot, CORS, no fake success', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const { createServer } = require('../src/server');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-leads-'));
+  const sent = []; const telegram = { kind: 'telegram', send: async t => { sent.push(t); return 1; } };
+  const { server } = createServer({ dataDir, secrets: {}, googleAuth: null, llm: null, telegram, env: {} });
+  await new Promise(r => server.listen(0, r));
+  const base = `http://127.0.0.1:${server.address().port}/leads`;
+  const post = (b, origin = 'https://www.carborundum.ai') => fetch(base, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify(b) });
+  let r = await post({ name: 'Test Shop Owner', company: 'Test Plumbing', email: 'test@example.com', phone: '(832) 555-0100', trade: 'Plumbing', notes: '3 trucks' });
+  const j = await r.json();
+  assert.equal(r.status, 200); assert.ok(j.ok && j.id); assert.equal(r.headers.get('access-control-allow-origin'), 'https://www.carborundum.ai');
+  const stored = fs.readFileSync(path.join(dataDir, 'leads', 'leads.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(stored.length, 1); assert.equal(stored[0].trade, 'plumbing'); assert.equal(stored[0].source, 'secondshift');
+  assert.match(sent[0], /New SecondShift early-access lead[\s\S]*Test Plumbing[\s\S]*832/);
+  assert.equal(fs.readdirSync(path.join(dataDir, 'outbox')).length, 1); // owner email (file mailer until Gmail is connected)
+  r = await post({ name: 'No Contact' }); assert.equal(r.status, 400); assert.match((await r.json()).error, /email or phone/);
+  r = await post({ name: 'Bot', email: 'bot@x.com', website: 'http://spam' }); assert.equal(r.status, 200);
+  r = await post({ name: 'Elsewhere', email: 'a@b.com' }, 'https://evil.example'); assert.equal(r.status, 403);
+  assert.equal(fs.readFileSync(path.join(dataDir, 'leads', 'leads.jsonl'), 'utf8').trim().split('\n').length, 1); // only the real lead
+  fs.rmSync(path.join(dataDir, 'leads'), { recursive: true }); fs.writeFileSync(path.join(dataDir, 'leads'), 'not a dir'); // make storing fail
+  r = await post({ name: 'Real Person', email: 'real@example.com' }); assert.equal(r.status, 500); assert.equal((await r.json()).ok, false);
+  server.close();
+});

@@ -15,6 +15,7 @@ const { createTts } = require('./brain/tts-deepgram');
 const { openDeepgramStream } = require('./brain/stt-deepgram');
 const { createLlm } = require('./brain/llm');
 const { createTelegram } = require('./notify/telegram');
+const { createLeads } = require('./leads');
 // Brain selection: SECONDSHIFT_LLM_PROVIDER wins; otherwise Claude when an Anthropic key exists,
 // then Abacus.AI RouteLLM, then any OpenAI-compatible key, else rules only.
 function createLlmFromEnv(env, secrets) {
@@ -59,6 +60,9 @@ function createServer(opts = {}) {
   const records = [];
   // Call alerts to the owner's Telegram (start + end of every call). SECONDSHIFT_TELEGRAM=off disables (tests).
   const telegram = opts.telegram !== undefined ? opts.telegram : (env.SECONDSHIFT_TELEGRAM === 'off' ? null : createTelegram({ token: secrets.telegramToken, chatId: secrets.telegramChatId }));
+  const leads = createLeads({ dataDir, telegram, mailer, ownerEmail: env.SECONDSHIFT_LEADS_EMAIL || (firstTenant && firstTenant.owner && firstTenant.owner.email) });
+  // Browsers may post leads only from the Carborundum site.
+  const LEAD_ORIGINS = (env.SECONDSHIFT_LEAD_ORIGINS || 'https://carborundum.ai,https://www.carborundum.ai').split(',');
   const deps = { tts, openStt, calendar, mailer, llm, telegram, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
@@ -68,10 +72,23 @@ function createServer(opts = {}) {
     const url = new URL(req.url, 'http://x');
     const send = (code, body, type = 'application/json') => { res.writeHead(code, { 'content-type': type }); res.end(typeof body === 'string' ? body : JSON.stringify(body)); };
     try {
+      if (url.pathname === '/leads') {
+        const origin = req.headers.origin;
+        if (origin && LEAD_ORIGINS.includes(origin)) { res.setHeader('access-control-allow-origin', origin); res.setHeader('vary', 'origin'); }
+        if (req.method === 'OPTIONS') { res.setHeader('access-control-allow-methods', 'POST'); res.setHeader('access-control-allow-headers', 'content-type'); res.writeHead(204); return res.end(); }
+        if (req.method !== 'POST') return send(405, { ok: false, error: 'POST only' });
+        if (origin && !LEAD_ORIGINS.includes(origin)) return send(403, { ok: false, error: 'origin not allowed' });
+        const raw = await readBody(req); if (raw.length > 20000) return send(413, { ok: false, error: 'too large' });
+        let body; try { body = /json/.test(req.headers['content-type'] || '') ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw)); } catch { return send(400, { ok: false, error: 'bad request' }); }
+        try {
+          const r = await leads.submit(body, { ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress, ua: req.headers['user-agent'] });
+          return send(r.ok ? 200 : r.status || 400, r.ok ? { ok: true, id: r.id } : { ok: false, error: r.error });
+        } catch (e) { console.error('lead store failed', e); return send(500, { ok: false, error: 'Could not save your request — please call or try again.' }); }
+      }
       if (req.method === 'GET' && url.pathname === '/health') {
         return send(200, {
           ok: !!tts && Object.keys(tenants).length > 0, tenants: Object.keys(tenants), tenantProblems: problems,
-          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? `${llm.provider}:${llm.model}` : 'off (rules only)', calendar: calendar.kind, email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)' },
+          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? `${llm.provider}:${llm.model}` : 'off (rules only)', calendar: calendar.kind, email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file },
         });
       }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {
