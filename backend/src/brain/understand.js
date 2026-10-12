@@ -50,11 +50,21 @@ function rules(text, expecting, ctx) {
   return out;
 }
 
-const SYSTEM = `You extract booking details from what a caller just said to a home-service company's phone assistant (HVAC, plumbing, electrical, roofing).
-Return ONLY a JSON object with any of these keys you can fill from THIS utterance (omit unknown keys):
-"issue" (what is wrong, short), "name" (caller's name), "address" (service address), "phone" (digits only),
-"when" (their preferred day/time, in their words), "yes" (true if they agreed), "no" (true if they declined),
-"emergency" (true ONLY for danger or active damage: gas smell, fire/smoke/sparks, flooding/burst pipe, no heat in freezing weather, carbon monoxide, sewage backup).`;
+const SYSTEM = `You are the listening half of a phone assistant that books service calls for a home-service company (HVAC, plumbing, electrical, roofing).
+Callers are often rambly or say everything in one breath, like a voicemail. Pull out EVERY detail present in the caller's latest words.
+Return ONLY a JSON object, omitting keys you cannot fill from the caller's latest words:
+"issue": what is wrong, a short phrase (max 12 words) using the caller's own words,
+"name": the caller's name exactly as said,
+"address": the service street address exactly as said,
+"phone": callback number, digits only,
+"when": their preferred day/time in their words (e.g. "tomorrow morning", "as soon as possible"),
+"yes": true if they agreed to / confirmed what the assistant just asked,
+"no": true if they declined / said it was wrong,
+"emergency": true ONLY for danger or active damage: gas smell, fire/smoke/sparks, flooding/burst pipe, no heat in freezing weather, carbon monoxide, sewage backup.
+Never invent values. Never copy these instructions into values.`;
+
+const norm = s => String(s).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const STOP = new Set(['the', 'and', 'my', 'is', 'a', 'an', 'it', 'its', 'of', 'to', 'in', 'on', 'at', 'for', 'with', 'our', 'we', 'i', 'out', 'here', 'need', 'needs']);
 
 /**
  * @param {string} text   caller utterance (final transcript)
@@ -64,15 +74,23 @@ Return ONLY a JSON object with any of these keys you can fill from THIS utteranc
 async function understand(text, expecting, ctx) {
   const r = rules(text, expecting, ctx);
   if (!ctx.llm) return r;
-  const j = await ctx.llm.json(SYSTEM, `The assistant just asked for: ${expecting}.\nCaller said: "${text}"`);
-  if (!j || typeof j !== 'object') return r;
+  const known = Object.entries(ctx.slots || {}).filter(([k, v]) => v && ['issue', 'name', 'address', 'phone'].includes(k)).map(([k, v]) => `${k}=${v}`).join('; ');
+  const j = await ctx.llm.json(SYSTEM, `Already known: ${known || 'nothing yet'}.\nThe assistant just asked for: ${expecting}.\nCaller's latest words: "${text}"`);
+  if (!j || typeof j !== 'object') return r; // model off / slow / error: rules carry the call
   const out = { ...r };
-  // Grounding guard: only accept a model-proposed name/address/issue if it actually appears in what
-  // the caller said. Small models echo schema words ("caller's name") — this blocks invented values.
-  const norm = s => String(s).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Grounding guard: model-proposed text must come from what the caller actually said, so a model
+  // can tidy and reorder but never invent. Name/address: verbatim substring. Issue: a short phrase
+  // whose content words all appear in the utterance.
   const said = norm(text);
-  const grounded = v => { const n = norm(v); return n.length >= 2 && said.includes(n); };
-  for (const k of ['issue', 'name', 'address']) if (!out[k] && typeof j[k] === 'string' && j[k].trim() && k !== expecting && grounded(j[k])) out[k] = j[k].trim();
+  const verbatim = v => { const n = norm(v); return n.length >= 2 && said.includes(n); };
+  const words = new Set(said.split(' '));
+  const summarised = v => { const w = norm(v).split(' ').filter(x => x.length > 2 && !STOP.has(x)); return w.length > 0 && w.every(x => words.has(x)); };
+  const str = k => (typeof j[k] === 'string' && j[k].trim() ? j[k].trim() : null);
+  // The model's version is preferred when grounded: rules take the whole sentence as the "issue"
+  // or "address", the model trims it to the part that matters.
+  if (str('name') && verbatim(str('name'))) out.name = str('name');
+  if (str('address') && verbatim(str('address')) && /\d/.test(str('address'))) out.address = str('address');
+  if (str('issue') && summarised(str('issue'))) out.issue = str('issue').charAt(0).toUpperCase() + str('issue').slice(1);
   if (!out.phone && j.phone) { const d = digitsOf(String(j.phone)); if (d) out.phone = d; }
   if (!out.when && typeof j.when === 'string') { const w = parseWhen(j.when, ctx.now, ctx.tz); if (w) out.when = w; }
   if (j.emergency === true && !out.emergency) { out.emergency = true; out.emergencyReason = 'model'; }

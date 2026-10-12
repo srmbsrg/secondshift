@@ -14,6 +14,13 @@ const { loadTenants, loadSecrets } = require('./config');
 const { createTts } = require('./brain/tts-deepgram');
 const { openDeepgramStream } = require('./brain/stt-deepgram');
 const { createLlm } = require('./brain/llm');
+// Brain selection: SECONDSHIFT_LLM_PROVIDER wins; otherwise Claude when an Anthropic key exists,
+// then any OpenAI-compatible key, else rules only.
+function createLlmFromEnv(env, secrets) {
+  const provider = env.SECONDSHIFT_LLM_PROVIDER || (secrets.anthropicKey ? 'anthropic' : secrets.llmKey ? 'openai' : 'none');
+  const apiKey = provider === 'anthropic' ? secrets.anthropicKey : secrets.llmKey;
+  return createLlm({ provider, baseUrl: env.SECONDSHIFT_LLM_BASE_URL, model: env.SECONDSHIFT_LLM_MODEL, apiKey, timeoutMs: +env.SECONDSHIFT_LLM_TIMEOUT_MS || undefined });
+}
 const { createGoogleAuth } = require('./google/auth');
 const { googleCalendar, fileCalendar } = require('./booking/calendar');
 const { gmailMailer, fileMailer } = require('./notify/email');
@@ -34,7 +41,7 @@ function createServer(opts = {}) {
   const mailer = opts.mailer || (google && (google.scopes || []).some(s => /gmail\.send/.test(s))
     ? gmailMailer({ auth: google, from: (firstTenant && firstTenant.owner && firstTenant.owner.email) || 'me' })
     : fileMailer({ dir: path.join(dataDir, 'outbox') }));
-  const llm = opts.llm !== undefined ? opts.llm : createLlm({ provider: env.SECONDSHIFT_LLM_PROVIDER || (secrets.llmKey ? 'openai' : 'none'), baseUrl: env.SECONDSHIFT_LLM_BASE_URL, model: env.SECONDSHIFT_LLM_MODEL, apiKey: secrets.llmKey });
+  const llm = opts.llm !== undefined ? opts.llm : createLlmFromEnv(env, secrets);
   const tts = opts.tts || (secrets.deepgramKey ? createTts({ apiKey: secrets.deepgramKey, model: (firstTenant && firstTenant.voice && firstTenant.voice.ttsModel) || undefined }) : null);
   const openStt = opts.openStt || (o => openDeepgramStream({ apiKey: secrets.deepgramKey, ...o }));
 

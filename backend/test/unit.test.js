@@ -143,3 +143,45 @@ test('session: caller hangs up while the agent is talking -> call log + owner em
   assert.ok(fs.readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').includes('furnace'));
   assert.equal(mails.length, 1);
 });
+
+test('llm: anthropic provider speaks the Messages API and falls back to null on errors', async () => {
+  const http = require('http');
+  const { createLlm } = require('../src/brain/llm');
+  let seen = null, mode = 'ok';
+  const srv = http.createServer((req, res) => {
+    let b = ''; req.on('data', d => b += d); req.on('end', () => {
+      seen = { path: req.url, key: req.headers['x-api-key'], ver: req.headers['anthropic-version'], body: JSON.parse(b) };
+      if (mode === 'err') { res.writeHead(529); return res.end('{}'); }
+      if (mode === 'slow') return setTimeout(() => res.end('{}'), 500);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ content: [{ type: 'text', text: '{"name":"Scott Murphy","when":"tomorrow"}' }] }));
+    });
+  });
+  await new Promise(r => srv.listen(0, r));
+  const llm = createLlm({ provider: 'anthropic', apiKey: 'test-key', baseUrl: `http://127.0.0.1:${srv.address().port}`, timeoutMs: 200 });
+  assert.equal(llm.model, 'claude-haiku-5-5');
+  assert.deepEqual(await llm.json('sys', 'user'), { name: 'Scott Murphy', when: 'tomorrow' });
+  assert.deepEqual([seen.path, seen.key, seen.ver, seen.body.system, seen.body.messages[0].content], ['/v1/messages', 'test-key', '2023-06-01', 'sys', 'user']);
+  mode = 'err'; assert.equal(await llm.json('s', 'u'), null);
+  mode = 'slow'; assert.equal(await llm.json('s', 'u'), null);
+  srv.close();
+  assert.equal(createLlm({ provider: 'anthropic', apiKey: '' }), null); // no key -> rules only
+});
+
+test('agent + model: one-breath voicemail-style message -> only the missing question, then books', async () => {
+  // Stands in for Claude's reply to the first utterance; the grounding guard still checks it.
+  const llm = { async json(sys, user) {
+    if (/22 Oak/.test(user)) return { address: '22 Oak Street', yes: false };
+    if (/kitchen sink/.test(user)) return { issue: 'kitchen sink is backed up', name: 'Scott Murphy', phone: '9034747930', when: 'tomorrow morning' };
+    return {};
+  } };
+  const sch = fakeScheduler(tenant);
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW, llm });
+  let r = await a.onUtterance("Yeah hi, uh, so my kitchen sink is backed up, it's been like that since last night, I'm Scott Murphy, you can reach me at 903 474 7930, tomorrow morning would be great if somebody could come out.");
+  assert.match(r.say, /address/);
+  r = await a.onUtterance("It's 22 Oak Street in Tyler, the blue house.");
+  assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM/);
+  r = await a.onUtterance('Yep, that works.'); assert.equal(a.outcome, 'booked');
+  const b = sch.booked[0];
+  assert.deepEqual([b.issue, b.name, b.phone, b.address], ['Kitchen sink is backed up', 'Scott Murphy', '9034747930', '22 Oak Street']);
+});

@@ -119,7 +119,8 @@ class CallSession {
     const to = this.tenant.owner && this.tenant.owner.email;
     if (!to || !this.deps.mailer) return;
     const s = rec.slots || {};
-    const head = rec.outcome === 'booked' ? `Booked: ${rec.booking.when}` : rec.outcome === 'transfer' ? 'EMERGENCY — transferred to on-call' : rec.outcome === 'callback' ? 'Needs a callback' : `Call ended (${rec.outcome})`;
+    const head = rec.outcome === 'booked' ? `Booked: ${rec.booking.when}` : rec.outcome === 'transfer' ? 'EMERGENCY — transferred to on-call' : rec.outcome === 'callback' ? 'Needs a callback'
+      : 'Caller hung up before booking — left details, needs a callback';
     const subject = `${rec.emergency ? '[URGENT] ' : ''}SecondShift: ${head} — ${s.name || rec.from || 'caller'}`;
     const lines = [
       `${this.tenant.shopName} — SecondShift call summary`, '',

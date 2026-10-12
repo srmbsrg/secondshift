@@ -25,6 +25,15 @@ const SCENARIOS = {
     ],
     expect: { outcome: 'booked', after: '<Hangup/>', slots: { name: /^Jordan Avery$/, address: /1412 Willow Bend/i, phone: /^7135550148$/, issue: /air condition/i } },
   },
+  // Voicemail-style caller (as in live pilot call 1): everything in one breath, then only the address.
+  onebreath: {
+    lines: [
+      "Yeah hi, so my kitchen sink is backed up and it's been like that since last night. My name is Scott Murphy, you can reach me at 903 474 7930, and tomorrow morning would be great if somebody could come out.",
+      "It's 22 Oak Street in Tyler.",
+      'Yes, that works.',
+    ],
+    expect: { outcome: 'booked', after: '<Hangup/>', slots: { name: /^Scott Murphy$/, address: /^22 Oak Street/i, phone: /^9034747930$/, issue: /sink/i } },
+  },
   emergency: {
     lines: ['I smell gas in my kitchen and I am really worried.'],
     expect: { outcome: 'transfer', after: '<Dial>+18325550123</Dial>' },
@@ -81,14 +90,15 @@ async function main() {
 
   const ticker = setInterval(() => {
     if (closed) return;
-    const chunk = outQueue.length ? outQueue.shift() : SILENCE;
+    const real = outQueue.length > 0; const chunk = real ? outQueue.shift() : SILENCE;
+    if (real && !outQueue.length) lastCallerEndAt = Date.now(); // actual moment the caller stopped talking
     ws.send(JSON.stringify({ event: 'media', streamSid, media: { track: 'inbound', payload: chunk.toString('base64') } }));
   }, 20);
   const speakLine = buf => {
     const frames = [];
     for (let i = 0; i < buf.length; i += 160) { const c = Buffer.alloc(160, 0xff); buf.copy(c, 0, i, Math.min(i + 160, buf.length)); frames.push(c); }
     outQueue.push(...Array(15).fill(SILENCE), ...frames);
-    lastCallerEndAt = Date.now() + (15 + frames.length) * 20;
+    lastCallerEndAt = null; // set by the ticker when the last frame is actually sent
   };
 
   ws.onmessage = async e => {
