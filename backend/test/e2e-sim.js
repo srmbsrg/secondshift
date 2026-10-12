@@ -61,7 +61,10 @@ async function main() {
   if (sc.transferNumber) t.emergency.transferNumber = sc.transferNumber;
   fs.writeFileSync(path.join(tenantDir, 'carborundum.json'), JSON.stringify(t));
 
-  const { server, records } = createServer({ tenantDir, dataDir: path.join(work, 'data'), secrets, googleAuth: null, env: { ...process.env } });
+  const { server, records } = createServer({ tenantDir, dataDir: path.join(work, 'data'), secrets, googleAuth: null,
+    // Rules-only unless a brain is named, so routine test runs spend no cloud tokens:
+    //   SECONDSHIFT_LLM_PROVIDER=abacus node test/e2e-sim.js onebreath    (or =ollama for a local model)
+    env: { SECONDSHIFT_LLM_PROVIDER: 'none', ...process.env } });
   await new Promise(r => server.listen(0, r));
   const port = server.address().port, base = `http://127.0.0.1:${port}`;
   console.log(`[sim] server :${port}  data: ${work}`);
