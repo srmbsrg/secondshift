@@ -1,0 +1,32 @@
+{
+  "id": "carborundum",
+  "shopName": "Carborundum",
+  "timezone": "America/Chicago",
+
+  "disclosure": "Thanks for calling {shop} — this call is recorded and answered by an automated assistant so I can book your service. How can I help?",
+  "recording": {
+    "storeAudio": false,
+    "storeTranscript": true,
+    "note": "Pilot default = transcript-only, no raw audio stored. Flip storeAudio only after Scott confirms consent wording."
+  },
+
+  "hours": {
+    "monday": [8, 17], "tuesday": [8, 17], "wednesday": [8, 17], "thursday": [8, 17], "friday": [8, 17],
+    "saturday": [8, 12]
+  },
+  "slotMinutes": 120,
+  "leadMinutes": 60,
+
+  "emergency": {
+    "action": "transfer",
+    "transferNumber": null,
+    "transferMessage": "That sounds urgent. I'm connecting you to our on-call technician right now. Please hold.",
+    "keywords": ["smell gas", "gas leak", "gas smell", "burst pipe", "pipe burst", "flooding", "water everywhere", "sparking", "sparks", "smoke", "burning smell", "fire", "carbon monoxide", "co alarm", "sewage", "no heat"],
+    "note": "transferNumber null = no live transfer yet; emergencies are booked at the earliest slot and flagged URGENT in the owner email."
+  },
+
+  "owner": { "email": "scottroymurphy.carb@gmail.com" },
+  "calendar": { "provider": "google", "calendarId": "primary" },
+  "voice": { "ttsModel": "aura-asteria-en", "sttModel": "nova-2-phonecall" },
+  "maxCallSeconds": 300
+}

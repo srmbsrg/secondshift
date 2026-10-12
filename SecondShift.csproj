@@ -6,4 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- The Node backend (backend/) is a separate deployable; keep it out of the Razor site build/publish. -->
+  <ItemGroup>
+    <Content Remove="backend/**" />
+    <None Remove="backend/**" />
+    <Compile Remove="backend/**" />
+  </ItemGroup>
+
 </Project>
