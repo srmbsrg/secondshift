@@ -25,6 +25,7 @@ Default dir `C:\Users\scott\secrets` (override `SECONDSHIFT_SECRETS_DIR`):
 | `Deepgram_api.txt` | STT + TTS | present, verified |
 | `secondshift_google_oauth.json` | Calendar + Gmail | created by `node tools/google-auth.js` after Scott's consent |
 | `anthropic_api_key.txt` (or `ANTHROPIC_API_KEY`) | Claude as the listening brain (default `claude-haiku-5-5`; `SECONDSHIFT_LLM_MODEL` to change) | not present yet (rules-only works) |
+| `SecondShift_Abacus_API.txt` (or `ABACUS_API_KEY`) | Claude via Abacus.AI RouteLLM (`https://routellm.abacus.ai/v1`, default `claude-haiku-5-5`, reasoning "minimal") — the pilot brain | present, verified |
 | `secondshift_llm_key.txt` (+ `SECONDSHIFT_LLM_PROVIDER/MODEL/BASE_URL`) | any OpenAI-compatible model instead | optional |
 | `twilio_account_sid.txt` + `twilio_auth_token.txt` | wiring an existing number (`tools/twilio-wire.js`) + webhook signature check | not present yet |
 

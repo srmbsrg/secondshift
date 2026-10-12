@@ -15,11 +15,11 @@ const { createTts } = require('./brain/tts-deepgram');
 const { openDeepgramStream } = require('./brain/stt-deepgram');
 const { createLlm } = require('./brain/llm');
 // Brain selection: SECONDSHIFT_LLM_PROVIDER wins; otherwise Claude when an Anthropic key exists,
-// then any OpenAI-compatible key, else rules only.
+// then Abacus.AI RouteLLM, then any OpenAI-compatible key, else rules only.
 function createLlmFromEnv(env, secrets) {
-  const provider = env.SECONDSHIFT_LLM_PROVIDER || (secrets.anthropicKey ? 'anthropic' : secrets.llmKey ? 'openai' : 'none');
-  const apiKey = provider === 'anthropic' ? secrets.anthropicKey : secrets.llmKey;
-  return createLlm({ provider, baseUrl: env.SECONDSHIFT_LLM_BASE_URL, model: env.SECONDSHIFT_LLM_MODEL, apiKey, timeoutMs: +env.SECONDSHIFT_LLM_TIMEOUT_MS || undefined });
+  const provider = env.SECONDSHIFT_LLM_PROVIDER || (secrets.anthropicKey ? 'anthropic' : secrets.abacusKey ? 'abacus' : secrets.llmKey ? 'openai' : 'none');
+  const apiKey = { anthropic: secrets.anthropicKey, abacus: secrets.abacusKey }[provider] || secrets.llmKey;
+  return createLlm({ provider, baseUrl: env.SECONDSHIFT_LLM_BASE_URL, model: env.SECONDSHIFT_LLM_MODEL, apiKey, timeoutMs: +env.SECONDSHIFT_LLM_TIMEOUT_MS || undefined, reasoningEffort: env.SECONDSHIFT_LLM_REASONING });
 }
 const { createGoogleAuth } = require('./google/auth');
 const { googleCalendar, fileCalendar } = require('./booking/calendar');

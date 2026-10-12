@@ -74,6 +74,8 @@ const STOP = new Set(['the', 'and', 'my', 'is', 'a', 'an', 'it', 'its', 'of', 't
 async function understand(text, expecting, ctx) {
   const r = rules(text, expecting, ctx);
   if (!ctx.llm) return r;
+  // A short, clear yes/no to a confirm question needs no model round trip (saves ~0.6 s per turn).
+  if ((r.yes || r.no) && !r.when && !r.emergency && String(text).trim().split(/\s+/).length <= 5) return r;
   const known = Object.entries(ctx.slots || {}).filter(([k, v]) => v && ['issue', 'name', 'address', 'phone'].includes(k)).map(([k, v]) => `${k}=${v}`).join('; ');
   const j = await ctx.llm.json(SYSTEM, `Already known: ${known || 'nothing yet'}.\nThe assistant just asked for: ${expecting}.\nCaller's latest words: "${text}"`);
   if (!j || typeof j !== 'object') return r; // model off / slow / error: rules carry the call

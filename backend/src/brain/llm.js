@@ -8,10 +8,18 @@ function createLlm(cfg = {}) {
   const provider = (cfg.provider || 'none').toLowerCase();
   if (provider === 'none') return null;
   if (provider === 'anthropic') return createAnthropic(cfg);
-  const baseUrl = (cfg.baseUrl || (provider === 'ollama' ? 'http://127.0.0.1:11434/v1' : 'https://api.openai.com/v1')).replace(/\/$/, '');
-  const model = cfg.model || (provider === 'ollama' ? 'qwen2.5:0.5b' : 'gpt-4o-mini');
+  // provider -> [default base URL, default model]. "abacus" = Abacus.AI RouteLLM, OpenAI-compatible,
+  // one key reaching Claude and other vendors' models.
+  const DEFAULTS = { ollama: ['http://127.0.0.1:11434/v1', 'qwen2.5:0.5b'], abacus: ['https://routellm.abacus.ai/v1', 'claude-haiku-5-5'], openai: ['https://api.openai.com/v1', 'gpt-4o-mini'] };
+  const [defBase, defModel] = DEFAULTS[provider] || DEFAULTS.openai;
+  const baseUrl = (cfg.baseUrl || defBase).replace(/\/$/, '');
+  const model = cfg.model || defModel;
   const apiKey = cfg.apiKey || '';
-  const timeoutMs = cfg.timeoutMs || 6000;
+  const timeoutMs = cfg.timeoutMs || 5000;
+  if (provider === 'abacus' && !apiKey) return null;
+  // Abacus serves claude-haiku-5-5 with hidden reasoning on (~350 tokens, ~3.5 s for a long caller turn);
+  // "minimal" brings it to ~0.7 s with the same extraction. Override with SECONDSHIFT_LLM_REASONING.
+  const reasoningEffort = cfg.reasoningEffort !== undefined ? cfg.reasoningEffort : provider === 'abacus' ? 'minimal' : null;
   return {
     provider, model,
     /** Ask for a JSON object; returns parsed object or null (never throws into the call). */
@@ -21,7 +29,7 @@ function createLlm(cfg = {}) {
         const res = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST', signal: ctl.signal,
           headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
-          body: JSON.stringify({ model, temperature: 0, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
+          body: JSON.stringify({ model, temperature: 0, response_format: { type: 'json_object' }, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}), messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
         });
         if (!res.ok) return null;
         const data = await res.json();
