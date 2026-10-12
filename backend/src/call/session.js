@@ -1,6 +1,21 @@
 'use strict';
 // Live console trace for pilot calls (SECONDSHIFT_VERBOSE=1). Same content as the transcript log.
 const live = (sid, type, data) => { if (process.env.SECONDSHIFT_VERBOSE) console.log(`[call ${String(sid || '').slice(-6)}] ${type}${data === undefined ? '' : ' ' + (typeof data === 'string' ? data : JSON.stringify(data))}`); };
+// Telegram alert text.
+const clock = (d, tz) => new Date(d).toLocaleString('en-US', { timeZone: tz || 'America/Chicago', weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+function callSummary(rec, tenant) {
+  const s = rec.slots || {};
+  const outcome = rec.outcome === 'booked' ? `✅ Booked: ${rec.booking && rec.booking.when}`
+    : rec.outcome === 'transfer' ? '🚨 EMERGENCY — transferred to on-call'
+    : rec.outcome === 'callback' ? '↩️ Needs a callback'
+    : '↩️ Caller hung up before booking — left details, needs a callback';
+  const secs = Math.round((new Date(rec.endedAt) - new Date(rec.startedAt)) / 1000);
+  return [`☎️ SecondShift call ended (${secs}s) — ${tenant.shopName}`, outcome,
+    `Caller: ${s.name || 'not given'} · ${s.phone || rec.from || 'unknown'}`,
+    s.address ? `Address: ${s.address}` : null,
+    `Problem: ${s.issue || 'not stated'}`,
+    rec.emergency ? `Emergency: ${rec.emergency.reason}` : null].filter(Boolean).join('\n');
+}
 // One live phone call: carrier media stream <-> Deepgram STT -> BookingAgent -> Deepgram TTS.
 // Phone manners from Tiny Paws: the disclosure greeting is pre-rendered so the first word is
 // immediate, and if the caller starts talking while we're speaking we stop (barge-in / "clear").
@@ -53,6 +68,7 @@ class CallSession {
     this.stt.on('error', e => this._log('error', 'stt: ' + (e && e.message)));
     this.maxTimer = setTimeout(() => this._hangup('max-duration'), (this.tenant.maxCallSeconds || 300) * 1000);
     this._log('start', { from: this.from, tenant: this.tenant.id });
+    this._alert(`📞 SecondShift call in progress — ${this.tenant.shopName} line, from ${this.from || 'unknown number'}, ${clock(this.startedAt, this.tenant.timezone)}`);
     await this._say(this.agent.greeting());
   }
 
@@ -113,6 +129,14 @@ class CallSession {
     if (this.speaking) { const s = this.speaking; this.speaking = { ...s, done: () => { s.done(); close(); } }; } else close();
   }
 
+  /** Fire-and-forget Telegram alert; failures go to the call log, never into the call. */
+  _alert(text) {
+    const tg = this.deps.telegram; if (!tg) return;
+    if (/^CApilotselftest/.test(this.callSid || '')) return; // the pilot harness's own wiring check
+    if (process.env.SECONDSHIFT_ALERT_TAG) text = `[${process.env.SECONDSHIFT_ALERT_TAG}] ${text}`;
+    tg.send(text).then(() => this._log('alert', 'sent')).catch(e => { this._log('error', 'telegram: ' + e.message); live(this.callSid, 'alert', 'FAILED: ' + e.message); });
+  }
+
   _t() { return Date.now() - this.startedAt.getTime(); }
   _log(type, data) { (this.events || (this.events = [])).push({ at: this._t(), type, data }); live(this.callSid, type, data); }
 
@@ -141,6 +165,7 @@ class CallSession {
     fs.appendFileSync(path.join(dir, 'calls.jsonl'), JSON.stringify(rec) + '\n');
     if (rec.storeAudio && this.audioIn.length) fs.writeFileSync(path.join(dir, `${this.callSid}-caller.wav`), encodeWavMulaw(Buffer.concat(this.audioIn)));
     live(this.callSid, 'END', { outcome: rec.outcome, endAction, booking: rec.booking && rec.booking.when, calendar: rec.booking && rec.booking.calendar });
+    this._alert(callSummary(rec, this.tenant));
     try { await this._email(rec); live(this.callSid, 'email', 'sent'); } catch (e) { live(this.callSid, 'email', 'FAILED: ' + e.message); fs.appendFileSync(path.join(dir, 'errors.log'), `${new Date().toISOString()} email: ${e.message}\n`); }
     this.record = rec;
     if (this.deps.onRecord) this.deps.onRecord(rec);

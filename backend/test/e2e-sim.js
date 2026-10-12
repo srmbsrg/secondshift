@@ -76,7 +76,7 @@ async function main() {
   const { server, records } = createServer({ tenantDir, dataDir: path.join(work, 'data'), secrets, googleAuth: null,
     // Rules-only unless a brain is named, so routine test runs spend no cloud tokens:
     //   SECONDSHIFT_LLM_PROVIDER=abacus node test/e2e-sim.js onebreath    (or =ollama for a local model)
-    env: { SECONDSHIFT_LLM_PROVIDER: 'none', ...process.env } });
+    env: { SECONDSHIFT_LLM_PROVIDER: 'none', SECONDSHIFT_TELEGRAM: 'off', ...process.env } }); // no alerts unless asked
   await new Promise(r => server.listen(0, r));
   const port = server.address().port, base = `http://127.0.0.1:${port}`;
   console.log(`[sim] server :${port}  data: ${work}`);
@@ -172,6 +172,7 @@ async function main() {
     ok = ok && good;
   }
   console.log(`\nE2E ${name}: ${ok ? 'PASS' : 'FAIL'}`);
+  if (process.env.SECONDSHIFT_TELEGRAM === 'on') await sleep(5000); // let the end-of-call alert go out
   process.exit(ok ? 0 : 1);
 }
 main().catch(e => { console.error('E2E error:', e); process.exit(1); });

@@ -14,6 +14,7 @@ const { loadTenants, loadSecrets } = require('./config');
 const { createTts } = require('./brain/tts-deepgram');
 const { openDeepgramStream } = require('./brain/stt-deepgram');
 const { createLlm } = require('./brain/llm');
+const { createTelegram } = require('./notify/telegram');
 // Brain selection: SECONDSHIFT_LLM_PROVIDER wins; otherwise Claude when an Anthropic key exists,
 // then Abacus.AI RouteLLM, then any OpenAI-compatible key, else rules only.
 function createLlmFromEnv(env, secrets) {
@@ -56,7 +57,9 @@ function createServer(opts = {}) {
 
   const endActions = new Map(); // callSid -> {action, transferNumber}
   const records = [];
-  const deps = { tts, openStt, calendar, mailer, llm, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
+  // Call alerts to the owner's Telegram (start + end of every call). SECONDSHIFT_TELEGRAM=off disables (tests).
+  const telegram = opts.telegram !== undefined ? opts.telegram : (env.SECONDSHIFT_TELEGRAM === 'off' ? null : createTelegram({ token: secrets.telegramToken, chatId: secrets.telegramChatId }));
+  const deps = { tts, openStt, calendar, mailer, llm, telegram, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
   const readBody = req => new Promise(r => { let b = ''; req.on('data', c => (b += c)); req.on('end', () => r(b)); });
