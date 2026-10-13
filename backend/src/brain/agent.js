@@ -2,7 +2,7 @@
 // The booking conversation. Pure logic: no audio, no network — talks to the outside world only
 // through the injected `scheduler` (find + book a slot). That keeps it unit-testable and lets the
 // same agent run behind any phone layer.
-const { understand, cleanAddress } = require('./understand');
+const { understand, cleanAddress, cleanName } = require('./understand');
 const { sayDateTime, relativeDay } = require('./time');
 
 const spellPhone = d => d ? `${d.slice(0, 3).split('').join(' ')}, ${d.slice(3, 6).split('').join(' ')}, ${d.slice(6).split('').join(' ')}` : '';
@@ -23,7 +23,10 @@ class BookingAgent {
     // caller recite it (live call 2 asked for it while the caller was mid-address). It is mentioned
     // once in the slot offer, and any number the caller says replaces it.
     if (this.callerDigits) { this.slots.phone = this.callerDigits; this.phoneSource = 'caller-id'; }
-    this.houseNumber = null;
+    this.houseNumber = null; this.readbackDone = false;
+    // How long a turn may wait for the model before replying on the rules alone (the model's extras
+    // are merged when they arrive). Scripted next-questions never wait on the model.
+    this.modelBudgetMs = o.modelBudgetMs !== undefined ? o.modelBudgetMs : 450;
     this.state = 'issue'; this.tries = {}; this.proposed = null; this.booking = null;
     this.emergency = null; this.outcome = 'in-progress'; this.excludeBefore = null;
   }
@@ -38,12 +41,29 @@ class BookingAgent {
       case 'address': return `Thanks${this.slots.name ? ', ' + this.slots.name.split(' ')[0] : ''}. What’s the address where you need service?`;
       case 'phone': return this.callerDigits ? `Is ${spellPhone(this.callerDigits)} the best number to reach you?` : 'What’s the best number to reach you?';
       case 'when': return 'When would you like a technician to come out?';
+      case 'readback': return this._readbackLine();
       default: return '';
     }
   }
+  // One read-back before the time is offered, so a misheard name or street gets caught (live call 3:
+  // "Murphy" -> "Mercy", street name misspelled).
+  _readbackLine() {
+    const n = this.slots.name && this.slots.name !== 'Not given' ? this.slots.name : null;
+    return n ? `I’ve got ${n} at ${this.slots.address} — is that right?` : `I’ve got the address as ${this.slots.address} — is that right?`;
+  }
   _next() {
-    for (const f of ['issue', 'name', 'address', 'phone', 'when']) if (!this.slots[f]) return f; // phone only when there is no caller ID
+    for (const f of ['issue', 'name', 'address']) if (!this.slots[f]) return f;
+    if (!this.readbackDone) return 'readback';
+    for (const f of ['phone', 'when']) if (!this.slots[f]) return f; // phone only when there is no caller ID
     return null;
+  }
+  /** Model extras that arrived after we had already replied: fill only what is still missing. */
+  _applyLate(g) {
+    if (!g || this.state === 'done') return;
+    if (g.issue && this.slots.issue && this.rawIssue && this.slots.issue === this.rawIssue) this.slots.issue = g.issue; // tidier wording
+    for (const k of ['name', 'address']) if (g[k] && !this.slots[k]) this.slots[k] = g[k];
+    if (g.when && !this.slots.when && this.state !== 'confirm') this.slots.when = g.when;
+    if (g.emergency && !this.emergency) this.emergency = { reason: 'model', text: this.slots.issue || '' }; // flag urgent
   }
   _retry(field) { this.tries[field] = (this.tries[field] || 0) + 1; return this.tries[field]; }
 
@@ -69,7 +89,10 @@ class BookingAgent {
     const u = await understand(text, this.state, {
       now: this.now(), tz: this.tenant.timezone, llm: this.llm,
       emergencyKeywords: (this.tenant.emergency && this.tenant.emergency.keywords) || [], slots: this.slots,
+      budgetMs: this.modelBudgetMs,
     });
+    if (u.late) u.late.then(g => this._applyLate(g));
+    if (this.state === 'issue' && u.issue && !this.slots.issue) this.rawIssue = u.issue;
 
     // Emergencies can be raised at any point in the call.
     if (u.emergency && !this.emergency) {
@@ -112,6 +135,19 @@ class BookingAgent {
           return { say: 'Sorry — what’s the street address, with the house number?' };
         }
         break;
+      case 'readback': {
+        if (this._townFragment(text, u)) return { say: `Thanks — ${this._readbackLine()}` };
+        if (u.yes && !u.no) { this.readbackDone = true; break; }
+        // A correction: take a new street address and/or a new name from what they said.
+        const fixed = await this._correction(text);
+        if (fixed) {
+          if (this._retry('readback') >= 3) { this.readbackDone = true; break; } // stop looping; keep what we have
+          return { say: `Thanks — ${this._readbackLine()}` };
+        }
+        if (u.no) return { say: 'Sorry about that — what should I fix, the name or the address?' };
+        if (this._retry('readback-unclear') >= 2) { this.readbackDone = true; break; }
+        return { say: `Sorry — ${this._readbackLine()}` };
+      }
       case 'phone':
         if (u.phone) this.slots.phone = u.phone;
         else if (u.yes && this.callerDigits) this.slots.phone = this.callerDigits;
@@ -122,14 +158,7 @@ class BookingAgent {
       case 'when':
         // The town often arrives as its own fragment right after the street ("Willow Bend Drive." /
         // "In Spring."): add it to the address instead of treating it as a failed time answer.
-        const frag = text.trim().replace(/[.!,]$/, '');
-        const town = !this.slots.when && this.slots.address && !u.when && (
-          (/^in\s+[a-z]+(\s+[a-z]+)?$/i.test(frag) && !/\bin\s/i.test(this.slots.address)) ||  // "...Drive." + "In Spring."
-          (/\sin$/i.test(this.slots.address) && /^[A-Z][a-z]+(\s+[A-Z][a-z]+)?$/.test(frag)));  // "...Drive in" + "Spring."
-        if (town) {
-          this.slots.address = `${this.slots.address} ${frag.replace(/^In\s/, 'in ')}`.replace(/\sin\s+in\s/i, ' in ');
-          return { say: this._ask('when') };
-        }
+        if (!this.slots.when && this._townFragment(text, u)) return { say: this._ask('when') };
         if (!this.slots.when) {
           if (this._retry('when') >= 2) this.slots.when = { asap: true, start: this.now(), end: null, label: 'as soon as possible' };
           else return { say: 'Sorry — what day and time works best? For example, tomorrow morning.' };
@@ -154,7 +183,9 @@ class BookingAgent {
           this.excludeBefore = this.proposed.end; this.slots.when = null; this.state = 'when';
           return { say: 'No problem. What day and time would work better?' };
         }
-        return { say: `Sorry — does ${sayDateTime(this.proposed.start, this.tenant.timezone)} work for you?` };
+        // Not a clear yes (e.g. "That work?" — an echo of our own question): ask once, plainly.
+        if (this._retry('unclear-yes') >= 2) return this._callback('unclear-confirmation');
+        return { say: 'Sorry — shall I book it?' };
       default: break;
     }
 
@@ -163,9 +194,44 @@ class BookingAgent {
     return this._propose();
   }
 
+  /**
+   * The town often arrives as its own fragment right after the street ("Willow Bend Drive." /
+   * "In Spring.", or "...Drive in" / "Spring."): add it to the address. Returns true if it did.
+   */
+  _townFragment(text, u) {
+    const frag = String(text).trim().replace(/[.!,]$/, '');
+    const town = this.slots.address && !u.when && !u.yes && !u.no && (
+      (/^in\s+[a-z]+(\s+[a-z]+)?$/i.test(frag) && !/\bin\s/i.test(this.slots.address)) ||
+      (/\sin$/i.test(this.slots.address) && /^[A-Z][a-z]+(\s+[A-Z][a-z]+)?$/.test(frag)));
+    if (town) this.slots.address = `${this.slots.address} ${frag.replace(/^In\s/, 'in ')}`.replace(/\sin\s+in\s/i, ' in ');
+    return !!town;
+  }
+
+  /**
+   * A read-back correction: "No, it's 334 Gamewood Drive" / "Murphy, M-U-R-P-H-Y" / "the name is Scott
+   * Murphy". Returns true if the name or address changed.
+   */
+  async _correction(text) {
+    let t = String(text).replace(/[’‘]/g, "'").trim();
+    for (let prev = null; prev !== t;) { prev = t; t = t.replace(/^\W*(no|nope|not quite|not right|that's not right|that is not right|actually|sorry|it's|it is|it should be|should be)\b[,.!]?\s*/i, '').trim(); } // "No, it's ..."
+    t = t.replace(/\b((?:[A-Za-z][\s.-]+){2,}[A-Za-z])\b/g, m => { const l = m.replace(/[\s.-]+/g, ''); return l.length >= 3 ? l[0].toUpperCase() + l.slice(1).toLowerCase() : m; }); // spelled letters
+    let changed = false;
+    const a = await understand(t, 'address', { now: this.now(), tz: this.tenant.timezone, emergencyKeywords: [] });
+    if (a.address && a.address !== this.slots.address) { this.slots.address = a.address; changed = true; t = t.replace(/\b\d[\s\S]*$/, '').trim(); }
+    const nameText = t.replace(/^(and\s+)?(the\s+)?(name\s+is|name's|my name is|this is|it's|spelled)\s+/i, '').replace(/[,.].*$/, '').trim();
+    const n = nameText && /^[A-Za-z][A-Za-z' -]{1,40}$/.test(nameText) ? cleanName(nameText) : null;
+    if (n && n !== this.slots.name && !/^(no|yes|yeah|the|name|address|street|it'?s|its|that|right|correct|okay|ok|sorry)$/i.test(n)) {
+      // A single word is usually the surname they're fixing ("Murphy"): keep the first name we had.
+      const parts = (this.slots.name || '').split(' ');
+      this.slots.name = n.includes(' ') || parts.length < 2 ? n : `${parts[0]} ${n}`;
+      changed = true;
+    }
+    return changed;
+  }
+
   /** Conversation state, so a turn can be undone when the caller turns out not to have finished. */
   snapshot() {
-    const keys = ['slots', 'state', 'tries', 'proposed', 'excludeBefore', 'emergency', 'outcome', 'phoneSource', 'houseNumber', 'streetName'];
+    const keys = ['slots', 'state', 'tries', 'proposed', 'excludeBefore', 'emergency', 'outcome', 'phoneSource', 'houseNumber', 'streetName', 'readbackDone', 'rawIssue'];
     return structuredClone(Object.fromEntries(keys.map(k => [k, this[k]])));
   }
   restore(s) { Object.assign(this, structuredClone(s)); }

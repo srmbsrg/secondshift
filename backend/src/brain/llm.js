@@ -22,6 +22,8 @@ function createLlm(cfg = {}) {
   const reasoningEffort = cfg.reasoningEffort !== undefined ? cfg.reasoningEffort : provider === 'abacus' ? 'minimal' : null;
   return {
     provider, model,
+    /** Opens the connection (TLS + keep-alive) at call start so the first real model turn is faster. */
+    warm() { return this.json('Reply with the JSON object {}', 'ping').catch(() => null); },
     /** Ask for a JSON object; returns parsed object or null (never throws into the call). */
     async json(system, user) {
       const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -51,6 +53,8 @@ function createAnthropic(cfg) {
   if (!apiKey) return null;
   return {
     provider: 'anthropic', model,
+    /** Opens the connection (TLS + keep-alive) at call start so the first real model turn is faster. */
+    warm() { return this.json('Reply with the JSON object {}', 'ping').catch(() => null); },
     async json(system, user) {
       const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), timeoutMs);
       try {

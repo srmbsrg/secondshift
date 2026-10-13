@@ -19,6 +19,7 @@ const SCENARIOS = {
       "Hi, my air conditioner stopped working and it's really hot in the house.",
       'Jordan Avery.',
       '1412 Willow Bend Drive in Spring.',
+      "Yes, that's right.",
       'Tomorrow morning if you can.',
       'Yes, that works.',
     ],
@@ -29,6 +30,7 @@ const SCENARIOS = {
     lines: [
       "Yeah hi, so my kitchen sink is backed up and it's been like that since last night. My name is Scott Murphy, you can reach me at 903 474 7930, and tomorrow morning would be great if somebody could come out.",
       "It's 22 Oak Street in Tyler.",
+      "Yes, that's right.",
       'Yes, that works.',
     ],
     expect: { outcome: 'booked', after: '<Hangup/>', slots: { name: /^Scott Murphy$/, address: /^22 Oak Street/i, phone: /^9034747930$/, issue: /sink/i } },
@@ -41,10 +43,26 @@ const SCENARIOS = {
     lines: [
       ['Yeah, my name is Scott Murphy. We have a backed up toilet.', 'Need someone to come out and take a look at it.'],
       ['Yeah, it is 1412', 'Willow Bend Drive, in Spring.'],
+      "Yes, that's right.",
       'Tomorrow morning.',
       'Yes.',
     ],
     expect: { outcome: 'booked', after: '<Hangup/>', slots: { name: /^Scott Murphy$/, address: /^1412 \w+ Bend Drive,? in Spring$/i, phone: /^7135550148$/, issue: /^backed up toilet/i } },
+  },
+  // Read-back catches a wrong address; the offer is answered with an echo ("That work?"), which
+  // must not book; only the clear yes after "Sorry — shall I book it?" does.
+  correction: {
+    lines: [
+      "Hi, our dishwasher stopped draining.",
+      'Dana Ortiz.',
+      '1412 Willow Bend Drive in Spring.',
+      "No, it's 1420 Willow Bend Drive in Spring.",
+      "Yes, that's right.",
+      'Tomorrow morning.',
+      'That work?',
+      'Yes, please book it.',
+    ],
+    expect: { outcome: 'booked', after: '<Hangup/>', slots: { name: /^Dana Ortiz$/, address: /^1420 \w+ Bend Drive,? in Spring$/i, phone: /^7135550148$/, issue: /dishwasher/i } },
   },
   emergency: {
     lines: ['I smell gas in my kitchen and I am really worried.'],

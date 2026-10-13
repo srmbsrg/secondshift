@@ -77,6 +77,9 @@ function openDeepgramStream({ apiKey, model = 'nova-2-phonecall', endpointingMs 
   ws.addEventListener('error', err => ev.emit('error', err && err.message ? err : new Error('deepgram websocket error')));
   ws.addEventListener('close', e => { clearInterval(keepAlive); clearTimeout(stale); closed = true; flush(); ev.emit('close', e.code); });
 
+  // The session sets how long to wait after the caller pauses, per question: short for answers that
+  // are short and predictable (name, yes/no, a time), longer for the problem and the address.
+  ev.setHold = ms => { if (ms > 0) holdMs = ms; };
   ev.send = buf => {
     if (closed) return;
     if (open) { try { ws.send(buf); } catch {} } else pending.push(buf);

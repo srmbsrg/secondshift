@@ -7,8 +7,8 @@
 // Rules win for the field being asked; the LLM only adds. The call works with the LLM off.
 const { parseWhen } = require('./time');
 
-const YES = /\b(yes|yeah|yep|yup|sure|correct|that works|works for me|sounds good|okay|ok|perfect|right|absolutely|please do|that's fine|that is fine)\b/i;
-const NO = /\b(no|nope|nah|not really|doesn'?t work|does not work|can'?t|cannot|different|another|other number)\b/i;
+const YES = /\b(yes|yeah|yep|yup|sure|correct|that works|works for me|that'?ll work|sounds good|sounds great|okay|ok|perfect|right|absolutely|please do|book it|go ahead|do it|that's fine|that is fine)\b/i;
+const NO = /\b(no|nope|nah|not really|not right|not quite|wrong|incorrect|doesn'?t work|does not work|can'?t|cannot|different|another|other number)\b/i;
 const BYE = /\b(bye|goodbye|never ?mind|hang up|that'?s all)\b/i;
 
 function digitsOf(text) {
@@ -62,8 +62,12 @@ const bareNumber = s => { const m = String(s).trim().match(/^(?:(?:yeah|yes|um+|
 function rules(text, expecting, ctx) {
   const out = {};
   const t = String(text || '');
-  if (YES.test(t) && !/\bno\b/i.test(t)) out.yes = true;
+  // A clear yes only: an echo of our own question ("That work?") or any question-shaped reply that
+  // does not start with a yes word is ambiguous, not agreement (live call 3).
+  const questionShaped = /\?\s*$/.test(t) && !/^\W*(yes|yeah|yep|yup|sure|ok|okay|absolutely)\b/i.test(t);
+  if (YES.test(t) && !/\b(no|not)\b/i.test(t) && !questionShaped) out.yes = true;
   if (NO.test(t) && !out.yes) out.no = true;
+  if (questionShaped && !out.no) out.unclear = true;
   if (BYE.test(t)) out.bye = true;
   const ph = digitsOf(t); if (ph) out.phone = ph;
   const kw = (ctx.emergencyKeywords || []).find(k => t.toLowerCase().includes(k.toLowerCase()));
@@ -109,7 +113,11 @@ const STOP = new Set(['the', 'and', 'my', 'is', 'a', 'an', 'it', 'its', 'of', 't
 /**
  * @param {string} text   caller utterance (final transcript)
  * @param {string} expecting which field the agent just asked for
- * @param {object} ctx {now, tz, emergencyKeywords, llm, slots}
+ * @param {object} ctx {now, tz, emergencyKeywords, llm, slots, budgetMs}
+ *
+ * The rules answer at once. The model gets `budgetMs` (default: wait for it); if it is slower, the
+ * reply goes out on the rules alone and `out.late` resolves with the model's grounded extras so the
+ * agent can fill them in the background. The caller never waits on the model for a scripted line.
  */
 async function understand(text, expecting, ctx) {
   if (expecting === 'address') text = wordsToDigits(unMoney(text));
@@ -121,31 +129,45 @@ async function understand(text, expecting, ctx) {
   const short = String(text).trim().split(/\s+/).length <= 4;
   if (short && !r.emergency && ((expecting === 'when' && r.when) || (expecting === 'confirm' && r.when) || (expecting === 'name' && r.name))) return r;
   const known = Object.entries(ctx.slots || {}).filter(([k, v]) => v && ['issue', 'name', 'address', 'phone'].includes(k)).map(([k, v]) => `${k}=${v}`).join('; ');
-  const j = await ctx.llm.json(SYSTEM, `Already known: ${known || 'nothing yet'}.\nThe assistant just asked for: ${expecting}.\nCaller's latest words: "${text}"`);
-  if (!j || typeof j !== 'object') return r; // model off / slow / error: rules carry the call
+  const pending = ctx.llm.json(SYSTEM, `Already known: ${known || 'nothing yet'}.\nThe assistant just asked for: ${expecting}.\nCaller's latest words: "${text}"`)
+    .then(j => (j && typeof j === 'object' ? grounded(j, text, ctx) : null)).catch(() => null);
+  const budget = ctx.budgetMs;
+  const j = budget === undefined ? await pending
+    : await Promise.race([pending, new Promise(res => setTimeout(() => res(undefined), budget))]);
+  if (j === undefined) return { ...r, late: pending };   // model still thinking: answer now, merge later
+  if (!j) return r;                                      // model off / error: rules carry the call
   const out = { ...r };
-  // Grounding guard: model-proposed text must come from what the caller actually said, so a model
-  // can tidy and reorder but never invent. Name/address: verbatim substring. Issue: a short phrase
-  // whose content words all appear in the utterance.
+  // The model's version is preferred when grounded: rules take the whole sentence as the "issue"
+  // or "address", the model trims it to the part that matters.
+  for (const k of ['name', 'address', 'issue']) if (j[k]) out[k] = j[k];
+  if (!out.phone && j.phone) out.phone = j.phone;
+  if (!out.when && j.when) out.when = j.when;
+  if (j.emergency && !out.emergency) { out.emergency = true; out.emergencyReason = 'model'; }
+  // Yes/no is never taken from the model: booking needs a clear affirmative in the caller's words
+  // (live call: the model read "That work?" as yes).
+  return out;
+}
+
+// Grounding guard: model-proposed text must come from what the caller actually said, so a model
+// can tidy and reorder but never invent. Name/address: verbatim substring. Issue/time: at least 2/3
+// of the phrase's content words are the caller's own (speech-to-text writes "back... up" where the
+// model writes "backed up").
+function grounded(j, text, ctx) {
   const said = norm(text);
   const verbatim = v => { const n = norm(v); return n.length >= 2 && said.includes(n); };
   const words = new Set(said.split(' '));
-  // At least 2/3 of the phrase's content words must be the caller's own (speech-to-text writes
-  // "back... up" where the model writes "backed up"), so it can tidy but not invent.
   const summarised = v => { const w = norm(v).split(' ').filter(x => x.length > 2 && !STOP.has(x)); return w.length > 0 && w.filter(x => words.has(x)).length * 3 >= w.length * 2; };
   const str = k => (typeof j[k] === 'string' && j[k].trim() ? j[k].trim() : null);
-  // The model's version is preferred when grounded: rules take the whole sentence as the "issue"
-  // or "address", the model trims it to the part that matters.
-  if (str('name') && verbatim(str('name'))) out.name = str('name');
-  if (str('address') && verbatim(str('address')) && isStreetAddress(str('address'))) out.address = tidyAddress(str('address'));
-  if (str('issue') && summarised(str('issue'))) out.issue = str('issue').charAt(0).toUpperCase() + str('issue').slice(1);
-  if (!out.phone && j.phone) { const d = digitsOf(String(j.phone)); if (d) out.phone = d; }
+  const g = {};
+  if (str('name') && verbatim(str('name'))) g.name = str('name');
+  if (str('address') && verbatim(str('address')) && isStreetAddress(str('address'))) g.address = tidyAddress(str('address'));
+  if (str('issue') && summarised(str('issue'))) g.issue = str('issue').charAt(0).toUpperCase() + str('issue').slice(1);
+  if (j.phone) { const d = digitsOf(String(j.phone)); if (d) g.phone = d; }
   // A time must come from the caller's words too: the model once read "need someone to come out" as
   // "as soon as possible" and the agent offered a slot nobody asked for.
-  if (!out.when && str('when') && summarised(str('when'))) { const w = parseWhen(str('when'), ctx.now, ctx.tz); if (w) out.when = w; }
-  if (j.emergency === true && !out.emergency) { out.emergency = true; out.emergencyReason = 'model'; }
-  if (!out.yes && !out.no) { if (j.yes === true) out.yes = true; else if (j.no === true) out.no = true; }
-  return out;
+  if (str('when') && summarised(str('when'))) { const w = parseWhen(str('when'), ctx.now, ctx.tz); if (w) g.when = w; }
+  if (j.emergency === true) g.emergency = true;
+  return g;
 }
 
 module.exports = { understand, rules, cleanName, cleanAddress, digitsOf, isStreetAddress };

@@ -57,7 +57,8 @@ test('agent: full booking conversation (rules only, no LLM)', async () => {
   let r = await a.onUtterance('Hi, my air conditioner stopped working and it is really hot in here.');
   assert.match(r.say, /name/);
   r = await a.onUtterance('Jordan Avery.'); assert.match(r.say, /address/);
-  r = await a.onUtterance('1412 Willow Bend Drive in Spring.'); assert.match(r.say, /When/); // caller ID is the callback number: not asked
+  r = await a.onUtterance('1412 Willow Bend Drive in Spring.'); assert.match(r.say, /I’ve got Jordan Avery at 1412 Willow Bend Drive in Spring — is that right\?/);
+  r = await a.onUtterance('Yes, that’s right.'); assert.match(r.say, /When/); // caller ID is the callback number: not asked
   r = await a.onUtterance('Tomorrow morning if you can.'); assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM, and we’ll call you at the number you’re calling from\. Does that work\?/);
   r = await a.onUtterance('Yes, that works.'); assert.equal(r.end, 'hangup'); assert.match(r.say, /all set/);
   assert.equal(sch.booked.length, 1);
@@ -69,7 +70,7 @@ test('agent: full booking conversation (rules only, no LLM)', async () => {
 test('agent: rejecting the slot re-asks and books a later one', async () => {
   const sch = fakeScheduler(tenant);
   const a = new BookingAgent({ tenant, callerNumber: '+17135550148', scheduler: sch, now: () => NOW });
-  for (const u of ['my water heater is leaking', 'Sam Lee', '22 Oak Street', 'tomorrow morning']) await a.onUtterance(u);
+  for (const u of ['my water heater is leaking', 'Sam Lee', '22 Oak Street', 'yes', 'tomorrow morning']) await a.onUtterance(u);
   let r = await a.onUtterance('no, that does not work'); assert.match(r.say, /work better/);
   r = await a.onUtterance('Wednesday afternoon'); assert.match(r.say, /Wednesday, October 14 at 12 PM/);
   r = await a.onUtterance('yes'); assert.equal(a.outcome, 'booked');
@@ -87,7 +88,7 @@ test('agent: emergency with NO transfer number -> earliest slot, flagged urgent'
   const a = new BookingAgent({ tenant, callerNumber: '+17135550148', scheduler: sch, now: () => NOW });
   let r = await a.onUtterance('there is a burst pipe and water everywhere');
   assert.ok(!r.end); assert.match(r.say, /name/);
-  for (const u of ['Pat Kim', '9 Elm Court']) r = await a.onUtterance(u);
+  for (const u of ['Pat Kim', '9 Elm Court', 'yes']) r = await a.onUtterance(u);
   assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM/); // no "when" question: ASAP
   r = await a.onUtterance('yes please'); assert.equal(a.outcome, 'booked'); assert.ok(sch.booked[0].emergency);
 });
@@ -114,6 +115,8 @@ test('agent: voicemail-style first sentence (live pilot call 1) keeps name, numb
   let r = await a.onUtterance('I need a plumber out here tomorrow. Phone number is (903) 474-7930. My name is Scott Murphy. Please call me at your earliest convenience. Thank you.');
   assert.match(r.say, /Thanks, Scott\. What’s the address/);
   r = await a.onUtterance('22 Oak Street in Tyler.');
+  assert.match(r.say, /I’ve got Scott Murphy at 22 Oak Street in Tyler — is that right\?/);
+  r = await a.onUtterance('Yes.');
   assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM/); // no name, number or day questions
   r = await a.onUtterance('yes'); assert.equal(a.outcome, 'booked');
   assert.deepEqual([sch.booked[0].name, sch.booked[0].phone], ['Scott Murphy', '9034747930']);
@@ -179,6 +182,8 @@ test('agent + model: one-breath voicemail-style message -> only the missing ques
   let r = await a.onUtterance("Yeah hi, uh, so my kitchen sink is backed up, it's been like that since last night, I'm Scott Murphy, you can reach me at 903 474 7930, tomorrow morning would be great if somebody could come out.");
   assert.match(r.say, /address/);
   r = await a.onUtterance("It's 22 Oak Street in Tyler, the blue house.");
+  assert.match(r.say, /I’ve got Scott Murphy at 22 Oak Street — is that right\?/);
+  r = await a.onUtterance('Yes.');
   assert.match(r.say, /tomorrow, Tuesday, October 13 at 8 AM/);
   r = await a.onUtterance('Yep, that works.'); assert.equal(a.outcome, 'booked');
   const b = sch.booked[0];
@@ -195,6 +200,11 @@ test('agent: live call 2 replay -> no phone question, address must be real, repe
   r = await a.onUtterance('1412');
   assert.match(r.say, /1412 — and what’s the street name/);
   r = await a.onUtterance('Willow Bend Drive.');
+  assert.match(r.say, /I’ve got Scott Mercer at 1412 Willow Bend Drive — is that right\?/);
+  // Live call 3: Deepgram heard "Murphy" as "Mercer"/"Mercy". The read-back catches it.
+  r = await a.onUtterance('No, it’s Murphy.');
+  assert.match(r.say, /Thanks — I’ve got Scott Murphy at 1412 Willow Bend Drive — is that right\?/);
+  r = await a.onUtterance('Yes, that’s right.');
   assert.match(r.say, /When would you like/); // caller ID used, phone never asked
   r = await a.onUtterance('Tomorrow morning.');
   assert.match(r.say, /8 AM, and we’ll call you at the number you’re calling from\. Does that work/);
@@ -207,7 +217,7 @@ test('agent: live call 2 replay -> no phone question, address must be real, repe
 test('agent: a different number said at the offer replaces the caller ID', async () => {
   const sch = fakeScheduler(tenant);
   const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
-  for (const u of ['my dryer vent is clogged', 'Ana Ruiz', '7 Pine Lane', 'tomorrow morning']) await a.onUtterance(u);
+  for (const u of ['my dryer vent is clogged', 'Ana Ruiz', '7 Pine Lane', 'yes', 'tomorrow morning']) await a.onUtterance(u);
   const r = await a.onUtterance('call my cell instead, 832 555 0199');
   assert.match(r.say, /Got it, I’ll use that number\..*Does that work/);
   assert.ok(!/number you’re calling from/.test(r.say));
@@ -245,12 +255,12 @@ test('understand + agent: address in pieces, Deepgram "$14.12" house number, str
   const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
   for (const u of ['my toilet is backed up', 'Scott Murphy']) await a.onUtterance(u);
   let r = await a.onUtterance('Yeah. It is $14.12.'); assert.match(r.say, /1412 — and what’s the street name/);
-  r = await a.onUtterance('Willow Bend Drive in Spring.'); assert.match(r.say, /When would you like/);
+  r = await a.onUtterance('Willow Bend Drive in Spring.'); assert.match(r.say, /at 1412 Willow Bend Drive in Spring — is that right/);
   assert.equal(a.slots.address, '1412 Willow Bend Drive in Spring');
   const b = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: fakeScheduler(tenant), now: () => NOW });
   for (const u of ['my toilet is backed up', 'Scott Murphy']) await b.onUtterance(u);
   r = await b.onUtterance('Willow Bend Drive.'); assert.match(r.say, /house number on Willow Bend Drive/);
-  r = await b.onUtterance('1412.'); assert.match(r.say, /When would you like/);
+  r = await b.onUtterance('1412.'); assert.match(r.say, /at 1412 Willow Bend Drive — is that right/);
   assert.equal(b.slots.address, '1412 Willow Bend Drive');
 });
 
@@ -306,7 +316,7 @@ test('agent: the town arriving as its own fragment joins the address', async () 
     const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: fakeScheduler(tenant), now: () => NOW });
     for (const u of ['my toilet is backed up', 'Scott Murphy', addr]) await a.onUtterance(u);
     const r = await a.onUtterance(frag);
-    assert.match(r.say, /When would you like/); assert.equal(a.slots.address, want);
+    assert.match(r.say, /Thanks — I’ve got Scott Murphy at .* — is that right/); assert.equal(a.slots.address, want);
   }
 });
 
@@ -333,4 +343,41 @@ test('leads: stored first, then Telegram + email; validation, honeypot, CORS, no
   fs.rmSync(path.join(dataDir, 'leads'), { recursive: true }); fs.writeFileSync(path.join(dataDir, 'leads'), 'not a dir'); // make storing fail
   r = await post({ name: 'Real Person', email: 'real@example.com' }); assert.equal(r.status, 500); assert.equal((await r.json()).ok, false);
   server.close();
+});
+
+test('pause fix: a slow model never delays a scripted next-question; its extras merge in the background', async () => {
+  let release; const slowLlm = { async json() { await new Promise(r => { release = r; }); return { issue: 'toilet is backed up', emergency: false }; } };
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: fakeScheduler(tenant), now: () => NOW, llm: slowLlm, modelBudgetMs: 120 });
+  const t0 = Date.now();
+  const r = await a.onUtterance('Yeah, hi, so our toilet is backed up and the water will not go down at all.');
+  assert.ok(Date.now() - t0 < 400, `scripted reply waited ${Date.now() - t0} ms`);
+  assert.match(r.say, /What’s your name/);
+  release(); await new Promise(r => setTimeout(r, 10));
+  assert.equal(a.slots.issue, 'Toilet is backed up'); // tidier wording arrived later and replaced the raw sentence
+});
+
+test('read-back: corrected street and a spelled surname are re-captured; only a clear yes books', async () => {
+  const sch = fakeScheduler(tenant);
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
+  for (const u of ['my toilet is backed up', 'Scott Mercy']) await a.onUtterance(u);
+  let r = await a.onUtterance('1412 Willow Ben Drive in Spring.');
+  assert.match(r.say, /I’ve got Scott Mercy at 1412 Willow Ben Drive in Spring — is that right/);
+  r = await a.onUtterance("No, it's 1412 Willow Bend Drive in Spring.");
+  assert.match(r.say, /Thanks — I’ve got Scott Mercy at 1412 Willow Bend Drive in Spring/);
+  r = await a.onUtterance('The name is Murphy, M-U-R-P-H-Y.');
+  assert.match(r.say, /Thanks — I’ve got Scott Murphy at 1412 Willow Bend Drive in Spring/);
+  r = await a.onUtterance('Yes.'); assert.match(r.say, /When would you like/);
+  r = await a.onUtterance('tomorrow morning'); assert.match(r.say, /Does that work\?/);
+  r = await a.onUtterance('That work?');                   // echo of our own question: not a yes
+  assert.equal(r.say, 'Sorry — shall I book it?'); assert.equal(sch.booked.length, 0);
+  r = await a.onUtterance('Yes, book it.'); assert.equal(a.outcome, 'booked');
+  assert.deepEqual([sch.booked[0].name, sch.booked[0].address], ['Scott Murphy', '1412 Willow Bend Drive in Spring']);
+});
+
+test('clear-yes: two unclear answers to the offer -> callback, never a booking', async () => {
+  const sch = fakeScheduler(tenant);
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: sch, now: () => NOW });
+  for (const u of ['my AC is out', 'Jo Park', '7 Pine Lane', 'yes', 'tomorrow morning']) await a.onUtterance(u);
+  let r = await a.onUtterance('Does that work?'); assert.equal(r.say, 'Sorry — shall I book it?');
+  r = await a.onUtterance('Hmm.'); assert.equal(a.outcome, 'callback'); assert.equal(sch.booked.length, 0);
 });

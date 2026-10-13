@@ -68,7 +68,9 @@ class CallSession {
     this.stt.on('error', e => this._log('error', 'stt: ' + (e && e.message)));
     this.maxTimer = setTimeout(() => this._hangup('max-duration'), (this.tenant.maxCallSeconds || 300) * 1000);
     this._log('start', { from: this.from, tenant: this.tenant.id });
+    if (this.deps.llm && this.deps.llm.warm) this.deps.llm.warm(); // non-blocking
     this._alert(`📞 SecondShift call in progress — ${this.tenant.shopName} line, from ${this.from || 'unknown number'}, ${clock(this.startedAt, this.tenant.timezone)}`);
+    this._setHold();
     await this._say(this.agent.greeting());
   }
 
@@ -99,6 +101,13 @@ class CallSession {
       this._log('continuation', text); return;
     }
     if (r.end) this._hangup(r.end === 'transfer' ? 'transfer' : 'hangup');
+    else this._setHold();
+  }
+
+  /** Wait after a pause, by what we just asked (ms). A too-early reply is still caught by the merge above. */
+  _setHold() {
+    const HOLD = { issue: 750, name: 450, address: 1000, readback: 450, phone: 600, when: 500, confirm: 450 };
+    if (this.stt && this.stt.setHold) this.stt.setHold(HOLD[this.agent.state] || 1000);
   }
 
   /** Speak text; resolves when the carrier reports playback finished (mark) or on barge-in. */
