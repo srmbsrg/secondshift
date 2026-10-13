@@ -41,6 +41,22 @@ function createLlm(cfg = {}) {
         return m ? JSON.parse(m[0]) : null;
       } catch { return null; } finally { clearTimeout(timer); }
     },
+    /** Multi-turn: system + [{role:'user'|'assistant', content}] -> parsed JSON object | null. */
+    async chatJson(system, messages, { maxTokens = 400, timeoutMs: t = 12000 } = {}) {
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), t);
+      try {
+        const res = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST', signal: ctl.signal,
+          headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
+          body: JSON.stringify({ model, temperature: 0.3, max_tokens: maxTokens, response_format: { type: 'json_object' }, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}), messages: [{ role: 'system', content: system }, ...messages] }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+        const m = text && text.match(/\{[\s\S]*\}/);
+        return m ? JSON.parse(m[0]) : null;
+      } catch { return null; } finally { clearTimeout(timer); }
+    },
   };
 }
 
@@ -62,6 +78,21 @@ function createAnthropic(cfg) {
           method: 'POST', signal: ctl.signal,
           headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({ model, max_tokens: 300, temperature: 0, system, messages: [{ role: 'user', content: user }] }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
+        const m = text.match(/\{[\s\S]*\}/);
+        return m ? JSON.parse(m[0]) : null;
+      } catch { return null; } finally { clearTimeout(timer); }
+    },
+    async chatJson(system, messages, { maxTokens = 400, timeoutMs: t = 12000 } = {}) {
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), t);
+      try {
+        const res = await fetch(`${baseUrl}/v1/messages`, {
+          method: 'POST', signal: ctl.signal,
+          headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model, max_tokens: maxTokens, temperature: 0.3, system, messages }),
         });
         if (!res.ok) return null;
         const data = await res.json();

@@ -390,3 +390,47 @@ test('read-back: stray words from speech-to-text never leak into the address or 
   const { cleanAddress } = require('../src/brain/understand');
   assert.equal(cleanAddress('Yeah it is for 22 Oak Street'), '22 Oak Street');
 });
+
+test('chat: grounded lead capture, rate limit, caps, origin', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const { createServer } = require('../src/server');
+  const { createChat } = require('../src/chat');
+  const { createLeads } = require('../src/leads');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-chat-'));
+  const sent = []; const telegram = { kind: 'telegram', send: async t => { sent.push(t); return 1; } };
+  let next = null; const llm = { async chatJson(sys, msgs) { assert.match(sys, /Carborundum AI website helper/); return next; } };
+  const leads = createLeads({ dataDir, telegram, mailer: null });
+  let t = 1e12; const chat = createChat({ llm, leads, limits: { perIpPerMin: 3, convoTurns: 3 }, now: () => t });
+  const { server } = createServer({ dataDir, secrets: {}, googleAuth: null, llm: null, telegram, chat, env: {} });
+  await new Promise(r => server.listen(0, r));
+  const url = `http://127.0.0.1:${server.address().port}/chat`;
+  const post = (messages, origin = 'https://www.carborundum.ai', extra = {}) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', origin, 'x-forwarded-for': extra.ip || '1.1.1.1' }, body: JSON.stringify({ messages, conversationId: extra.cid || 'c1' }) });
+
+  next = { reply: 'SecondShift answers your missed calls. $300/mo.', lead: null };
+  let r = await post([{ role: 'user', content: 'what is secondshift' }]); let j = await r.json();
+  assert.equal(r.status, 200); assert.match(j.reply, /\$300/); assert.equal(r.headers.get('access-control-allow-origin'), 'https://www.carborundum.ai');
+
+  // Model proposes a lead with an email the visitor never typed -> not saved.
+  next = { reply: 'Thanks!', lead: { name: 'Pat', email: 'invented@x.com' } };
+  r = await post([{ role: 'user', content: 'I am Pat, call me sometime' }], undefined, { ip: '2.2.2.2' }); j = await r.json();
+  assert.equal(j.lead, undefined); assert.equal(sent.length, 0);
+
+  // Real details typed by the visitor -> stored with source=chat + Telegram alert, once per conversation.
+  next = { reply: 'Got it, the team will reach out.', lead: { name: 'Pat Lee', company: 'Lee Plumbing', email: 'pat@leeplumbing.com', phone: '832-555-0177', trade: 'plumbing', notes: 'wants SecondShift' } };
+  const convo = [{ role: 'user', content: 'Interested. Pat Lee, Lee Plumbing, pat@leeplumbing.com, 832-555-0177' }];
+  r = await post(convo, undefined, { ip: '3.3.3.3', cid: 'c-lead' }); j = await r.json();
+  assert.deepEqual(j.lead, { saved: true });
+  const stored = fs.readFileSync(path.join(dataDir, 'leads', 'leads.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(stored.length, 1); assert.equal(stored[0].source, 'chat'); assert.match(sent[0], /early-access lead \(chat\)[\s\S]*Lee Plumbing/);
+  r = await post(convo, undefined, { ip: '3.3.3.3', cid: 'c-lead' }); j = await r.json(); assert.equal(j.lead, undefined); // no duplicate
+
+  // Caps: long message, conversation length, rate limit, foreign origin.
+  r = await post([{ role: 'user', content: 'x'.repeat(700) }], undefined, { ip: '4.4.4.4' }); assert.equal(r.status, 413);
+  const many = []; for (let i = 0; i < 4; i++) many.push({ role: 'user', content: 'q' + i }, { role: 'assistant', content: 'a' });
+  r = await post(many.slice(0, -1), undefined, { ip: '5.5.5.5' }); j = await r.json(); assert.ok(j.capped);
+  for (let i = 0; i < 3; i++) await post([{ role: 'user', content: 'hi' }], undefined, { ip: '6.6.6.6' });
+  r = await post([{ role: 'user', content: 'hi' }], undefined, { ip: '6.6.6.6' }); assert.equal(r.status, 429);
+  t += 61e3; r = await post([{ role: 'user', content: 'hi' }], undefined, { ip: '6.6.6.6' }); assert.equal(r.status, 200);
+  r = await post([{ role: 'user', content: 'hi' }], 'https://evil.example', { ip: '7.7.7.7' }); assert.equal(r.status, 403);
+  server.close();
+});
