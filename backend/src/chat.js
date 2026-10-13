@@ -23,6 +23,7 @@ SECONDSHIFT — LIVE, FOR SALE NOW
 - Buy: the "Get SecondShift — $300/mo" button on carborundum.ai/secondshift, or https://buy.stripe.com/28EdR9eYhaLDgDG5HdaMU0q
 - Setup is done hands-on with each shop: we forward the shop's after-hours line and tune it to the shop.
 - Calendar: SecondShift keeps the schedule and sends the owner every booking. It does NOT yet sync into the shop's own Google or Outlook calendar — that is the next thing being added. Never say it does.
+- How the owner is alerted (instant message alerts today) is set up during onboarding. Do not promise email, texts to a specific phone, or any particular app — say "it alerts you" / "sends you every booking".
 
 CARBON AND SILICON — IN DEVELOPMENT
 - Carbon (a field app for techs) and Silicon (an office / operations system) are what Carborundum is building next. They are early and in progress, not finished products you can buy today.
