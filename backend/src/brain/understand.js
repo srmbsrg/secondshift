@@ -27,7 +27,10 @@ function cleanAddress(text) {
   // A street address needs a house number followed by a street name ("1412 Willow Bend"), or a
   // numbered rural road ("County Road 12"). A sentence with no number ("need someone to come out
   // and take a look") is NOT an address (live call 2 booked that as the location).
-  return isStreetAddress(s) ? s : null;
+  if (!isStreetAddress(s)) return null;
+  // Start at the house number: drop lead-in words speech-to-text leaves in ("for 1420 Willow...").
+  const m = s.match(/\b\d+[a-z]?[.,]?\s+(?:[nsew]\.?\s+)?[a-z]{2,}/i);
+  return m ? s.slice(m.index) : s;
 }
 const STREET = /\b(street|st|drive|dr|road|rd|lane|ln|avenue|ave|court|ct|circle|cir|boulevard|blvd|way|place|pl|trail|trl|parkway|pkwy|highway|hwy|loop|terrace|bend|run|ridge)\b/i;
 // Deepgram's smart formatting reads a spoken house number as money ("fourteen twelve" -> "$14.12",

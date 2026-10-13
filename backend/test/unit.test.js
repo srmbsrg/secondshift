@@ -381,3 +381,12 @@ test('clear-yes: two unclear answers to the offer -> callback, never a booking',
   let r = await a.onUtterance('Does that work?'); assert.equal(r.say, 'Sorry — shall I book it?');
   r = await a.onUtterance('Hmm.'); assert.equal(a.outcome, 'callback'); assert.equal(sch.booked.length, 0);
 });
+
+test('read-back: stray words from speech-to-text never leak into the address or the name', async () => {
+  const a = new BookingAgent({ tenant, callerNumber: '+19034747930', scheduler: fakeScheduler(tenant), now: () => NOW });
+  for (const u of ['my dishwasher stopped draining', 'Dana Ortiz', '1412 Willow Bend Drive in Spring.']) await a.onUtterance(u);
+  const r = await a.onUtterance("No. It's for 1420 Willow Bend Drive in Spring.");
+  assert.match(r.say, /Thanks — I’ve got Dana Ortiz at 1420 Willow Bend Drive in Spring — is that right/);
+  const { cleanAddress } = require('../src/brain/understand');
+  assert.equal(cleanAddress('Yeah it is for 22 Oak Street'), '22 Oak Street');
+});

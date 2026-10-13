@@ -217,8 +217,14 @@ class BookingAgent {
     t = t.replace(/\b((?:[A-Za-z][\s.-]+){2,}[A-Za-z])\b/g, m => { const l = m.replace(/[\s.-]+/g, ''); return l.length >= 3 ? l[0].toUpperCase() + l.slice(1).toLowerCase() : m; }); // spelled letters
     let changed = false;
     const a = await understand(t, 'address', { now: this.now(), tz: this.tenant.timezone, emergencyKeywords: [] });
-    if (a.address && a.address !== this.slots.address) { this.slots.address = a.address; changed = true; t = t.replace(/\b\d[\s\S]*$/, '').trim(); }
+    const fixedAddress = !!(a.address && a.address !== this.slots.address);
+    if (fixedAddress) { this.slots.address = a.address; changed = true; t = t.replace(/\b\d[\s\S]*$/, '').trim(); }
+    const cued = /^(and\s+)?(the\s+)?(name\s+is|name's|my name is|this is|spelled)\s+/i.test(t);
     const nameText = t.replace(/^(and\s+)?(the\s+)?(name\s+is|name's|my name is|this is|it's|spelled)\s+/i, '').replace(/[,.].*$/, '').trim();
+    // Words left over around an address fix ("No, it's for 1420 ...") are not a name unless the caller
+    // said so ("...and the name is Murphy") or it's a capitalised word that isn't a function word.
+    if (fixedAddress && !cued && !/^[A-Z][a-z']{2,}(\s+[A-Z][a-z']+)?$/.test(nameText)) return changed;
+    if (/^(for|at|on|in|to|is|and|the|a|an|um|uh)$/i.test(nameText)) return changed;
     const n = nameText && /^[A-Za-z][A-Za-z' -]{1,40}$/.test(nameText) ? cleanName(nameText) : null;
     if (n && n !== this.slots.name && !/^(no|yes|yeah|the|name|address|street|it'?s|its|that|right|correct|okay|ok|sorry)$/i.test(n)) {
       // A single word is usually the surname they're fixing ("Murphy"): keep the first name we had.
