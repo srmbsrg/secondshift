@@ -37,4 +37,20 @@ function fileMailer({ dir, from = 'secondshift@localhost' }) {
   };
 }
 
-module.exports = { gmailMailer, fileMailer, rfc822 };
+function resendMailer({ apiKey, from, cc }) {
+  return {
+    kind: 'resend',
+    async send(msg) {
+      const body = { from, to: Array.isArray(msg.to) ? msg.to : [msg.to], subject: msg.subject, text: msg.text };
+      if (cc) body.cc = Array.isArray(cc) ? cc : [cc];           // keep the gmail in the loop (fallback/CC)
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`resend send ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return (await res.json()).id;
+    },
+  };
+}
+
+module.exports = { gmailMailer, fileMailer, resendMailer, rfc822 };

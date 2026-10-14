@@ -26,7 +26,7 @@ function createLlmFromEnv(env, secrets) {
 }
 const { createGoogleAuth } = require('./google/auth');
 const { googleCalendar, fileCalendar } = require('./booking/calendar');
-const { gmailMailer, fileMailer } = require('./notify/email');
+const { gmailMailer, fileMailer, resendMailer } = require('./notify/email');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -41,9 +41,16 @@ function createServer(opts = {}) {
   const calendar = opts.calendar || (google && firstTenant && firstTenant.calendar && firstTenant.calendar.provider === 'google'
     ? googleCalendar({ auth: google, calendarId: firstTenant.calendar.calendarId || 'primary', timeZone: firstTenant.timezone })
     : fileCalendar({ file: path.join(dataDir, 'calendar.json') }));
-  const mailer = opts.mailer || (google && (google.scopes || []).some(s => /gmail\.send/.test(s))
-    ? gmailMailer({ auth: google, from: (firstTenant && firstTenant.owner && firstTenant.owner.email) || 'me' })
-    : fileMailer({ dir: path.join(dataDir, 'outbox') }));
+  // Outbound owner notifications. Prefer Resend (sends from the verified carborundum.ai domain) when a
+  // RESEND_API_KEY is configured; CC the existing gmail so nothing is missed mid-switch. Falls back to
+  // the Gmail API (if Google consent granted) and finally to writing .eml files locally.
+  const mailer = opts.mailer || (secrets.resendKey
+    ? resendMailer({ apiKey: secrets.resendKey,
+                     from: env.SECONDSHIFT_EMAIL_FROM || 'SecondShift <no-reply@carborundum.ai>',
+                     cc: env.SECONDSHIFT_EMAIL_CC || 'scottroymurphy.carb@gmail.com' })
+    : (google && (google.scopes || []).some(s => /gmail\.send/.test(s))
+      ? gmailMailer({ auth: google, from: (firstTenant && firstTenant.owner && firstTenant.owner.email) || 'me' })
+      : fileMailer({ dir: path.join(dataDir, 'outbox') })));
   const llm = opts.llm !== undefined ? opts.llm : createLlmFromEnv(env, secrets);
   const tts = opts.tts || (secrets.deepgramKey ? createTts({ apiKey: secrets.deepgramKey, model: (firstTenant && firstTenant.voice && firstTenant.voice.ttsModel) || undefined }) : null);
   const openStt = opts.openStt || (o => openDeepgramStream({ apiKey: secrets.deepgramKey, ...o }));

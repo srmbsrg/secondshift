@@ -41,6 +41,7 @@ function loadSecrets(env = process.env) {
   return {
     dir,
     deepgramKey: env.DEEPGRAM_API_KEY || readSecret(dir, 'Deepgram_api.txt'),
+    resendKey: env.RESEND_API_KEY || readSecret(dir, 'Resend_API.txt'),
     telegramToken: env.TELEGRAM_BOT_TOKEN || readSecret(dir, 'Telegram_bot_token.txt'),
     telegramChatId: env.TELEGRAM_CHAT_ID || '6735511617',
     llmKey: env.SECONDSHIFT_LLM_KEY || readSecret(dir, 'secondshift_llm_key.txt'),
