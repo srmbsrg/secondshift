@@ -59,7 +59,8 @@ function createServer(opts = {}) {
   // Outbound owner notifications. Prefer Resend (sends from the verified carborundum.ai domain) when a
   // RESEND_API_KEY is configured; CC the existing gmail so nothing is missed mid-switch. Falls back to
   // the Gmail API (if Google consent granted) and finally to writing .eml files locally.
-  const mailer = opts.mailer || (secrets.resendKey
+  // SECONDSHIFT_EMAIL=off forces the local outbox (tests/sims must never mail anyone).
+  const mailer = opts.mailer || (env.SECONDSHIFT_EMAIL === 'off' ? fileMailer({ dir: path.join(dataDir, 'outbox') }) : secrets.resendKey
     ? resendMailer({ apiKey: secrets.resendKey,
                      from: env.SECONDSHIFT_EMAIL_FROM || 'SecondShift <no-reply@carborundum.ai>',
                      cc: env.SECONDSHIFT_EMAIL_CC || 'scottroymurphy.carb@gmail.com' })
