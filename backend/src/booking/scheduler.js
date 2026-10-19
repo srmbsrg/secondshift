@@ -3,7 +3,7 @@
 const { findSlot } = require('./slots');
 const { sayDateTime } = require('../brain/time');
 
-function createScheduler({ tenant, calendar, now = () => new Date(), callerNumber }) {
+function createScheduler({ tenant, calendar, now = () => new Date(), callerNumber, callSid }) {
   return {
     async findSlot(pref, excludeBefore) {
       const from = now(), to = new Date(from.getTime() + 15 * 86400000);
@@ -25,9 +25,11 @@ function createScheduler({ tenant, calendar, now = () => new Date(), callerNumbe
           `Caller ID: ${callerNumber || 'unknown'}`,
         ].filter(Boolean).join('\n'),
         start: d.slot.start, end: d.slot.end,
+        // structured copy for calendars that keep real records (Silicon); text calendars ignore it
+        data: { name: d.name, phone: d.phone, address: d.address, issue: d.issue, emergency: d.emergency }, callSid, callerNumber,
       };
       const r = await calendar.create(ev);
-      return { ...r, when: sayDateTime(d.slot.start, tenant.timezone), calendar: calendar.kind, event: ev };
+      return { ...r, when: sayDateTime(d.slot.start, tenant.timezone), calendar: r.calendarKind || calendar.kind, event: ev };
     },
   };
 }

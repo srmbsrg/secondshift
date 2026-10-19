@@ -23,6 +23,7 @@ const fs = require('fs'), path = require('path');
 const { BookingAgent } = require('../brain/agent');
 const { createScheduler } = require('../booking/scheduler');
 const { encodeWavMulaw } = require('./wav');
+const { callSummaryText } = require('../integrations/silicon');
 
 class CallSession {
   /**
@@ -54,7 +55,7 @@ class CallSession {
     const now = this.deps.now || (() => new Date());
     this.agent = new BookingAgent({
       tenant: this.tenant, callerNumber: this.from, llm: this.deps.llm, now,
-      scheduler: createScheduler({ tenant: this.tenant, calendar: this.deps.calendar, now, callerNumber: this.from }),
+      scheduler: createScheduler({ tenant: this.tenant, calendar: this.deps.calendar, now, callerNumber: this.from, callSid: this.callSid }),
     });
     this.stt = this.deps.openStt({ model: (this.tenant.voice && this.tenant.voice.sttModel) || undefined });
     // Barge-in only on real words (2+), not on raw voice activity: line noise, breathing or an
@@ -175,9 +176,36 @@ class CallSession {
     if (rec.storeAudio && this.audioIn.length) fs.writeFileSync(path.join(dir, `${this.callSid}-caller.wav`), encodeWavMulaw(Buffer.concat(this.audioIn)));
     live(this.callSid, 'END', { outcome: rec.outcome, endAction, booking: rec.booking && rec.booking.when, calendar: rec.booking && rec.booking.calendar });
     this._alert(callSummary(rec, this.tenant));
+    await this._postToSilicon(rec, sum).catch(e => live(this.callSid, 'silicon', 'FAILED: ' + e.message));
     try { await this._email(rec); live(this.callSid, 'email', 'sent'); } catch (e) { live(this.callSid, 'email', 'FAILED: ' + e.message); fs.appendFileSync(path.join(dir, 'errors.log'), `${new Date().toISOString()} email: ${e.message}\n`); }
     this.record = rec;
     if (this.deps.onRecord) this.deps.onRecord(rec);
+  }
+
+  /**
+   * Integrated mode only: attach the call summary + transcript to the Silicon job this call booked.
+   * Carries the full booking too (same externalRef), so if the booking post was queued during an
+   * outage, whichever arrives first creates the complete job and the other just fills it in.
+   */
+  async _postToSilicon(rec, sum) {
+    const silicon = this.deps.silicon;
+    if (!silicon || rec.outcome !== 'booked' || !sum.booking || !sum.booking.event) return;
+    const ev = sum.booking.event, d = ev.data || {};
+    const payload = {
+      externalRef: `secondshift:${this.callSid}`,
+      tenant: this.tenant.id,
+      customer: { name: d.name || null, phone: d.phone || null, address: d.address || null },
+      issue: d.issue || null,
+      emergency: d.emergency ? { reason: d.emergency.reason } : null,
+      scheduledFor: ev.start.toISOString(), durationMinutes: Math.round((ev.end - ev.start) / 60000),
+      call: {
+        sid: this.callSid, from: this.from, outcome: rec.outcome,
+        summary: callSummaryText({ slots: rec.slots, outcome: rec.outcome, emergency: rec.emergency, from: this.from }),
+        transcript: rec.transcript ? rec.transcript.map(l => ({ who: l.who, text: l.text })) : undefined,
+      },
+    };
+    try { await silicon.postJob(payload); live(this.callSid, 'silicon', 'call details posted'); }
+    catch (e) { if (!e.disabled) silicon.enqueue(payload, e.message); throw e; }
   }
 
   async _email(rec) {
