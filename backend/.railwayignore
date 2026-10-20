@@ -1,0 +1,3 @@
+# never upload local runtime data (calendar, call logs, leads, outboxes) when running `railway up` from backend/
+data/
+node_modules/

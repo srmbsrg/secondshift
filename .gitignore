@@ -482,3 +482,7 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# SecondShift backend runtime data (calendar.json, call logs, outbox) — never commit
+backend/data/
+*.oauth.json

@@ -1,0 +1,17 @@
+{
+  "name": "secondshift-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SecondShift MVP backend: inbound AI voice agent that answers after-hours calls, books jobs into Google Calendar, routes emergencies, and emails the owner.",
+  "main": "src/server.js",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/unit.test.js test/silicon.test.js",
+    "e2e": "node test/e2e-sim.js",
+    "twilio-wire": "node tools/twilio-wire.js",
+    "pilot": "node tools/live-pilot.js",
+    "google-auth": "node tools/google-auth.js"
+  },
+  "dependencies": {}
+}
