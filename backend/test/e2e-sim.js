@@ -14,6 +14,12 @@ const { loadSecrets } = require('../src/config');
 const { createTts } = require('../src/brain/tts-deepgram');
 
 const SCENARIOS = {
+  // Caller gives the problem and a name, then hangs up before booking (follow-up: "hangup").
+  hangup: {
+    lines: ["Hi, my furnace is making a loud banging noise.", 'QA Test Casey.'],
+    hangUpAfterLines: 2,
+    expect: { outcome: 'in-progress', after: '<Hangup/>', slots: { name: /casey/i, issue: /furnace|bang/i } },
+  },
   booking: {
     lines: [
       "Hi, my air conditioner stopped working and it's really hot in the house.",
@@ -156,6 +162,9 @@ async function main() {
       // and never start the next line while still talking.
       if (clears !== clearsAtMark) return;
       while (outQueue.length) await sleep(50);
+      if (sc.hangUpAfterLines && lineIdx >= sc.hangUpAfterLines) { // caller hangs up: Twilio sends 'stop' and closes the stream
+        ws.send(JSON.stringify({ event: 'stop', streamSid, stop: { callSid } })); setTimeout(() => ws.close(), 200); return;
+      }
       if (lineIdx < callerAudio.length) { await sleep(400); speakLine(callerAudio[lineIdx++]); }
     }
   };

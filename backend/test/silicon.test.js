@@ -117,3 +117,41 @@ test('call summary text is plain English with the key facts', () => {
   const t = callSummaryText({ slots: { name: 'Jordan', phone: '7135550148', address: '1 Main', issue: 'AC out' }, outcome: 'booked', emergency: null });
   assert.match(t, /Booked by SecondShift/); assert.match(t, /Jordan/); assert.match(t, /AC out/);
 });
+
+// -- Follow-ups (callbacks / hang-ups -> Silicon follow-up list) --
+const { followUpPayload } = require('../src/integrations/silicon');
+
+test('follow-ups flag is OFF by default, and needs integrated mode', () => {
+  assert.equal(siliconSettings(tenant, {}).post_followups, false);
+  assert.equal(siliconSettings(tenant, { SECONDSHIFT_POST_TO_SILICON: 'true' }).post_followups, false, 'integrated alone does not turn follow-ups on');
+  assert.equal(siliconSettings(tenant, { SECONDSHIFT_POST_TO_SILICON: 'true', SECONDSHIFT_POST_FOLLOWUPS: 'true' }).post_followups, true);
+  assert.equal(siliconSettings(tenant, { SECONDSHIFT_POST_FOLLOWUPS: 'true' }).post_followups, false, 'standalone: nothing to post to');
+});
+
+test('only callbacks and hang-ups become follow-ups (never booked calls or emergency transfers)', () => {
+  const base = { callSid: 'CAf', tenantId: 'carborundum', from: '+17135550148', slots: { name: 'Pat', issue: 'no heat' } };
+  assert.equal(followUpPayload({ ...base, outcome: 'booked' }), null);
+  assert.equal(followUpPayload({ ...base, outcome: 'transfer' }), null);
+  const cb = followUpPayload({ ...base, outcome: 'callback' });
+  assert.equal(cb.kind, 'callback'); assert.equal(cb.externalRef, 'secondshift:CAf:followup');
+  assert.equal(cb.customer.phone, '+17135550148', 'falls back to caller ID'); assert.equal(cb.reason, 'no heat');
+  assert.equal(followUpPayload({ ...base, outcome: 'in-progress' }).kind, 'hangup');
+});
+
+test('follow-up posts go to the follow-ups endpoint; queued ones are retried to the same endpoint', async () => {
+  const calls = []; let down = true;
+  const fetchImpl = async (url, init) => {
+    calls.push(url);
+    if (down) return { ok: false, status: 503, json: async () => ({ ok: false, error: 'down' }) };
+    return { ok: true, status: 201, json: async () => ({ ok: true, created: true, followUp: { id: 'f1' } }) };
+  };
+  const outboxFile = path.join(tmp(), 'outbox.jsonl');
+  const client = createSiliconClient({ url: 'https://silicon.test', token: 'tok', fetchImpl, backoffMs: 1, retries: 1, outboxFile });
+  const payload = followUpPayload({ callSid: 'CAq', tenantId: 'carborundum', from: '+1', outcome: 'callback', slots: {} });
+  await assert.rejects(client.postFollowUp(payload));
+  client.enqueue(payload, 'down', 'followup');
+  down = false;
+  const r = await client.flushOutbox();
+  assert.deepEqual(r, { sent: 1, kept: 0 });
+  assert.ok(calls.every(u => u === 'https://silicon.test/api/integrations/secondshift/followups'));
+});
