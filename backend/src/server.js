@@ -52,6 +52,7 @@ function createServer(opts = {}) {
     } else siliconStatus = 'MISCONFIGURED (needs SILICON_URL + SILICON_INTEGRATION_TOKEN) - standalone';
   }
   if (silicon) siliconStatus = `on:${silicon.url}`;
+  const siliconFollowups = !!silicon && (opts.siliconFollowups !== undefined ? !!opts.siliconFollowups : sil.post_followups);
   const calendar = silicon ? siliconCalendar({ client: silicon, fallback: ownCalendar, tenant: firstTenant, log: (...a) => console.error(...a) }) : ownCalendar;
   if (silicon && opts.siliconFlushMs !== 0) {
     const h = setInterval(() => silicon.flushOutbox().catch(() => {}), opts.siliconFlushMs || 60_000); if (h.unref) h.unref();
@@ -89,7 +90,7 @@ function createServer(opts = {}) {
   const LEAD_ORIGINS = (env.SECONDSHIFT_LEAD_ORIGINS || 'https://carborundum.ai,https://www.carborundum.ai').split(',');
   // Website helper: same brain, same lead store. SECONDSHIFT_CHAT=off disables it.
   const chat = opts.chat !== undefined ? opts.chat : (env.SECONDSHIFT_CHAT === 'off' ? null : createChat({ llm: opts.chatLlm !== undefined ? opts.chatLlm : llm, leads }));
-  const deps = { tts, openStt, calendar, mailer, llm, telegram, silicon, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
+  const deps = { tts, openStt, calendar, mailer, llm, telegram, silicon, siliconFollowups, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
   const readBody = req => new Promise(r => { let b = ''; req.on('data', c => (b += c)); req.on('end', () => r(b)); });
@@ -127,7 +128,7 @@ function createServer(opts = {}) {
       if (req.method === 'GET' && url.pathname === '/health') {
         return send(200, {
           ok: !!tts && Object.keys(tenants).length > 0, tenants: Object.keys(tenants), tenantProblems: problems,
-          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? `${llm.provider}:${llm.model}` : 'off (rules only)', calendar: calendar.kind, silicon: siliconStatus, email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
+          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? `${llm.provider}:${llm.model}` : 'off (rules only)', calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
         });
       }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {

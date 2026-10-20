@@ -23,7 +23,7 @@ const fs = require('fs'), path = require('path');
 const { BookingAgent } = require('../brain/agent');
 const { createScheduler } = require('../booking/scheduler');
 const { encodeWavMulaw } = require('./wav');
-const { callSummaryText } = require('../integrations/silicon');
+const { callSummaryText, followUpPayload } = require('../integrations/silicon');
 
 class CallSession {
   /**
@@ -177,6 +177,7 @@ class CallSession {
     live(this.callSid, 'END', { outcome: rec.outcome, endAction, booking: rec.booking && rec.booking.when, calendar: rec.booking && rec.booking.calendar });
     this._alert(callSummary(rec, this.tenant));
     await this._postToSilicon(rec, sum).catch(e => live(this.callSid, 'silicon', 'FAILED: ' + e.message));
+    await this._postFollowUp(rec).catch(e => live(this.callSid, 'silicon-followup', 'FAILED: ' + e.message));
     try { await this._email(rec); live(this.callSid, 'email', 'sent'); } catch (e) { live(this.callSid, 'email', 'FAILED: ' + e.message); fs.appendFileSync(path.join(dir, 'errors.log'), `${new Date().toISOString()} email: ${e.message}\n`); }
     this.record = rec;
     if (this.deps.onRecord) this.deps.onRecord(rec);
@@ -206,6 +207,19 @@ class CallSession {
     };
     try { await silicon.postJob(payload); live(this.callSid, 'silicon', 'call details posted'); }
     catch (e) { if (!e.disabled) silicon.enqueue(payload, e.message); throw e; }
+  }
+
+  /**
+   * Follow-ups flag only (default OFF): a callback request or a hang-up becomes an item on Silicon's
+   * follow-up list (not a job). Telegram/email alerts are unchanged either way.
+   */
+  async _postFollowUp(rec) {
+    const silicon = this.deps.silicon;
+    if (!silicon || !this.deps.siliconFollowups) return;
+    const payload = followUpPayload({ callSid: this.callSid, tenantId: this.tenant.id, from: this.from, outcome: rec.outcome, slots: rec.slots, emergency: rec.emergency, transcript: rec.transcript });
+    if (!payload) return;
+    try { await silicon.postFollowUp(payload); live(this.callSid, 'silicon-followup', `${payload.kind} posted`); }
+    catch (e) { if (!e.disabled) silicon.enqueue(payload, e.message, 'followup'); throw e; }
   }
 
   async _email(rec) {

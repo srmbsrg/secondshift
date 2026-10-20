@@ -4,6 +4,7 @@
 //
 //   availability(from, to) -> [{start,end}]   times when Silicon has no tech free
 //   postJob(payload)       -> {created, job}  idempotent on payload.externalRef (retries are safe)
+//   postFollowUp(payload)  -> {created, followUp}  callback / hang-up item (not a job); same idempotency
 //
 // A post that still fails after retries is written to an outbox file and retried in the
 // background, so a Silicon outage never loses a booking. Contract: manifold docs/SCHEDULER-HUB-CONTRACT.md
@@ -28,20 +29,22 @@ function createSiliconClient({ url, token, fetchImpl = fetch, timeoutMs = 4000, 
   // 4xx (except 408/429) won't get better by retrying.
   const retryable = e => !e.status || e.status >= 500 || e.status === 408 || e.status === 429;
 
-  async function postJob(payload) {
+  async function postWithRetry(p, payload) {
     if (!payload || !payload.externalRef) throw new Error('externalRef required');
     let last;
     for (let i = 0; i < retries; i++) {
-      try { return await call('POST', '/api/integrations/secondshift/jobs', payload); }
+      try { return await call('POST', p, payload); }
       catch (e) { last = e; if (!retryable(e)) break; if (i < retries - 1) await sleep(backoffMs * (i + 1)); }
     }
     throw last;
   }
+  const postJob = payload => postWithRetry('/api/integrations/secondshift/jobs', payload);
+  const postFollowUp = payload => postWithRetry('/api/integrations/secondshift/followups', payload);
 
-  function enqueue(payload, reason) {
+  function enqueue(payload, reason, kind = 'job') {
     if (!outboxFile) return;
     fs.mkdirSync(path.dirname(outboxFile), { recursive: true });
-    fs.appendFileSync(outboxFile, JSON.stringify({ at: new Date().toISOString(), reason, payload }) + '\n');
+    fs.appendFileSync(outboxFile, JSON.stringify({ at: new Date().toISOString(), reason, kind, payload }) + '\n');
   }
 
   /** Retry everything in the outbox once; keep what still fails. Returns {sent, kept}. */
@@ -51,7 +54,7 @@ function createSiliconClient({ url, token, fetchImpl = fetch, timeoutMs = 4000, 
     const keep = []; let sent = 0;
     for (const l of lines) {
       let item; try { item = JSON.parse(l); } catch { continue; }
-      try { await postJob(item.payload); sent++; } catch (e) { if (retryable(e)) keep.push(l); else log('silicon outbox drop', e.message); }
+      try { await (item.kind === 'followup' ? postFollowUp : postJob)(item.payload); sent++; } catch (e) { if (retryable(e)) keep.push(l); else log('silicon outbox drop', e.message); }
     }
     fs.writeFileSync(outboxFile, keep.length ? keep.join('\n') + '\n' : '');
     return { sent, kept: keep.length };
@@ -62,7 +65,7 @@ function createSiliconClient({ url, token, fetchImpl = fetch, timeoutMs = 4000, 
     return (j.busy || []).map(b => ({ start: new Date(b.start), end: new Date(b.end) }));
   }
 
-  return { url: base, postJob, availability, enqueue, flushOutbox };
+  return { url: base, postJob, postFollowUp, availability, enqueue, flushOutbox };
 }
 
 /** Plain-English call summary for the job card in Silicon / Carbon. */
@@ -114,4 +117,25 @@ function siliconCalendar({ client, fallback, tenant, log = () => {} }) {
   };
 }
 
-module.exports = { createSiliconClient, siliconCalendar, callSummaryText };
+/**
+ * Follow-up payload for a call that did not book: the caller asked for a callback, or hung up.
+ * Returns null for booked calls and emergency transfers (those are not follow-ups).
+ */
+function followUpPayload({ callSid, tenantId, from, outcome, slots = {}, emergency, transcript }) {
+  if (outcome === 'booked' || outcome === 'transfer') return null;
+  const kind = outcome === 'callback' ? 'callback' : 'hangup';
+  return {
+    externalRef: `secondshift:${callSid}:followup`,
+    tenant: tenantId,
+    kind,
+    customer: { name: slots.name || null, phone: slots.phone || from || null },
+    reason: slots.issue || null,
+    call: {
+      sid: callSid, from: from || null, outcome,
+      summary: callSummaryText({ slots, outcome, emergency, from }),
+      transcript: transcript ? transcript.map(l => ({ who: l.who, text: l.text })) : undefined,
+    },
+  };
+}
+
+module.exports = { createSiliconClient, siliconCalendar, callSummaryText, followUpPayload };
