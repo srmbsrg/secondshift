@@ -175,6 +175,8 @@ async function main() {
   console.log('time to first word (stream start -> first bot audio):', firstBotAudioAt, 'ms');
   console.log('caller-finished -> bot-starts-speaking per turn (ms):', turnLatencies.join(', '));
   console.log('after-stream TwiML:', after.replace(/<\?xml[^>]*>/, ''));
+  console.log('booking:', JSON.stringify(rec && rec.booking), '| callSid:', callSid);
+  if (rec && rec.booking && rec.booking.calendar === 'silicon') console.log(`[sim] SILICON JOB created: id=${rec.booking.id} externalRef=secondshift:${callSid}`);
   const calFile = path.join(work, 'data', 'calendar.json');
   if (fs.existsSync(calFile)) { const ev = JSON.parse(fs.readFileSync(calFile, 'utf8')); console.log('calendar events:', ev.length); for (const x of ev) console.log('  ', x.start, '->', x.end, '|', x.summary, '|', x.location); }
   const outbox = path.join(work, 'data', 'outbox');

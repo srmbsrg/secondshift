@@ -50,7 +50,20 @@ function loadSecrets(env = process.env) {
     twilioAccountSid: env.TWILIO_ACCOUNT_SID || readSecret(dir, 'twilio_account_sid.txt'),
     twilioAuthToken: env.TWILIO_AUTH_TOKEN || readSecret(dir, 'twilio_auth_token.txt'),
     googleTokenFile: env.SECONDSHIFT_GOOGLE_TOKEN || path.join(dir, 'secondshift_google_oauth.json'),
+    siliconToken: env.SILICON_INTEGRATION_TOKEN || readSecret(dir, 'secondshift_silicon_integration_token.txt'),
   };
 }
 
-module.exports = { lintTenant, loadTenants, loadSecrets, AI_WORDS };
+/**
+ * Integrated mode switch. Default OFF (SecondShift standalone). Turn on per shop in the tenant file
+ * (integrations.silicon.post_to_silicon: true + url) or for the whole service with the env vars
+ * SECONDSHIFT_POST_TO_SILICON=true and SILICON_URL. Env wins over the tenant file.
+ */
+function siliconSettings(tenant, env = process.env) {
+  const t = (tenant && tenant.integrations && tenant.integrations.silicon) || {};
+  const flag = env.SECONDSHIFT_POST_TO_SILICON;
+  const on = flag === undefined || flag === '' ? t.post_to_silicon === true : /^(1|true|on|yes)$/i.test(flag);
+  return { post_to_silicon: on, url: env.SILICON_URL || t.url || null };
+}
+
+module.exports = { lintTenant, loadTenants, loadSecrets, siliconSettings, AI_WORDS };

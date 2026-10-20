@@ -27,6 +27,13 @@
 
   "owner": { "email": "scottroymurphy.carb@gmail.com" },
   "calendar": { "provider": "google", "calendarId": "primary" },
+  "integrations": {
+    "silicon": {
+      "post_to_silicon": false,
+      "url": "https://manifold-web-production.up.railway.app",
+      "note": "true = bookings become jobs on Silicon's schedule (needs SILICON_INTEGRATION_TOKEN). false = standalone. Env SECONDSHIFT_POST_TO_SILICON overrides."
+    }
+  },
   "voice": { "ttsModel": "aura-asteria-en", "sttModel": "nova-2-phonecall" },
   "maxCallSeconds": 300
 }

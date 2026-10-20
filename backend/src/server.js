@@ -10,7 +10,8 @@ const http = require('http'), path = require('path');
 const { attachWebSocket } = require('./phone/ws');
 const twilio = require('./phone/twilio');
 const { CallSession } = require('./call/session');
-const { loadTenants, loadSecrets } = require('./config');
+const { loadTenants, loadSecrets, siliconSettings } = require('./config');
+const { createSiliconClient, siliconCalendar } = require('./integrations/silicon');
 const { createTts } = require('./brain/tts-deepgram');
 const { openDeepgramStream } = require('./brain/stt-deepgram');
 const { createLlm } = require('./brain/llm');
@@ -38,13 +39,28 @@ function createServer(opts = {}) {
   const firstTenant = Object.values(tenants)[0];
 
   const google = opts.googleAuth !== undefined ? opts.googleAuth : createGoogleAuth(secrets.googleTokenFile);
-  const calendar = opts.calendar || (google && firstTenant && firstTenant.calendar && firstTenant.calendar.provider === 'google'
+  const ownCalendar = opts.calendar || (google && firstTenant && firstTenant.calendar && firstTenant.calendar.provider === 'google'
     ? googleCalendar({ auth: google, calendarId: firstTenant.calendar.calendarId || 'primary', timeZone: firstTenant.timezone })
     : fileCalendar({ file: path.join(dataDir, 'calendar.json') }));
+  // Integrated mode: Silicon is the schedule (availability + job records); our own calendar stays
+  // as the fallback so a Silicon outage never drops a booking. Off by default = standalone.
+  const sil = siliconSettings(firstTenant, env);
+  let silicon = opts.silicon || null, siliconStatus = 'off';
+  if (!silicon && sil.post_to_silicon) {
+    if (sil.url && secrets.siliconToken) {
+      silicon = createSiliconClient({ url: sil.url, token: secrets.siliconToken, fetchImpl: opts.fetch || fetch, outboxFile: path.join(dataDir, 'silicon-outbox.jsonl'), log: (...a) => console.error(...a) });
+    } else siliconStatus = 'MISCONFIGURED (needs SILICON_URL + SILICON_INTEGRATION_TOKEN) - standalone';
+  }
+  if (silicon) siliconStatus = `on:${silicon.url}`;
+  const calendar = silicon ? siliconCalendar({ client: silicon, fallback: ownCalendar, tenant: firstTenant, log: (...a) => console.error(...a) }) : ownCalendar;
+  if (silicon && opts.siliconFlushMs !== 0) {
+    const h = setInterval(() => silicon.flushOutbox().catch(() => {}), opts.siliconFlushMs || 60_000); if (h.unref) h.unref();
+  }
   // Outbound owner notifications. Prefer Resend (sends from the verified carborundum.ai domain) when a
   // RESEND_API_KEY is configured; CC the existing gmail so nothing is missed mid-switch. Falls back to
   // the Gmail API (if Google consent granted) and finally to writing .eml files locally.
-  const mailer = opts.mailer || (secrets.resendKey
+  // SECONDSHIFT_EMAIL=off forces the local outbox (tests/sims must never mail anyone).
+  const mailer = opts.mailer || (env.SECONDSHIFT_EMAIL === 'off' ? fileMailer({ dir: path.join(dataDir, 'outbox') }) : secrets.resendKey
     ? resendMailer({ apiKey: secrets.resendKey,
                      from: env.SECONDSHIFT_EMAIL_FROM || 'SecondShift <no-reply@carborundum.ai>',
                      cc: env.SECONDSHIFT_EMAIL_CC || 'scottroymurphy.carb@gmail.com' })
@@ -73,7 +89,7 @@ function createServer(opts = {}) {
   const LEAD_ORIGINS = (env.SECONDSHIFT_LEAD_ORIGINS || 'https://carborundum.ai,https://www.carborundum.ai').split(',');
   // Website helper: same brain, same lead store. SECONDSHIFT_CHAT=off disables it.
   const chat = opts.chat !== undefined ? opts.chat : (env.SECONDSHIFT_CHAT === 'off' ? null : createChat({ llm: opts.chatLlm !== undefined ? opts.chatLlm : llm, leads }));
-  const deps = { tts, openStt, calendar, mailer, llm, telegram, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
+  const deps = { tts, openStt, calendar, mailer, llm, telegram, silicon, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
   const readBody = req => new Promise(r => { let b = ''; req.on('data', c => (b += c)); req.on('end', () => r(b)); });
@@ -111,7 +127,7 @@ function createServer(opts = {}) {
       if (req.method === 'GET' && url.pathname === '/health') {
         return send(200, {
           ok: !!tts && Object.keys(tenants).length > 0, tenants: Object.keys(tenants), tenantProblems: problems,
-          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? `${llm.provider}:${llm.model}` : 'off (rules only)', calendar: calendar.kind, email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
+          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? `${llm.provider}:${llm.model}` : 'off (rules only)', calendar: calendar.kind, silicon: siliconStatus, email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
         });
       }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {
@@ -134,7 +150,7 @@ function createServer(opts = {}) {
   attachWebSocket(server, '/media/twilio', conn => {
     new CallSession({ conn, provider: twilio, tenants, deps, onEnd: (sid, end) => endActions.set(sid, end) });
   });
-  return { server, tenants, problems, records, endActions, modules: { calendar: calendar.kind, mailer: mailer.kind, llm, tts: !!tts } };
+  return { server, tenants, problems, records, endActions, silicon, modules: { calendar: calendar.kind, silicon: siliconStatus, mailer: mailer.kind, llm, tts: !!tts } };
 }
 
 if (require.main === module) {
