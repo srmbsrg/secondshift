@@ -63,7 +63,11 @@ function siliconSettings(tenant, env = process.env) {
   const t = (tenant && tenant.integrations && tenant.integrations.silicon) || {};
   const flag = env.SECONDSHIFT_POST_TO_SILICON;
   const on = flag === undefined || flag === '' ? t.post_to_silicon === true : /^(1|true|on|yes)$/i.test(flag);
-  return { post_to_silicon: on, url: env.SILICON_URL || t.url || null };
+  // Follow-ups (callbacks / hang-ups -> Silicon follow-up list, NOT jobs). Default OFF; only
+  // meaningful when integrated mode is on. Env SECONDSHIFT_POST_FOLLOWUPS wins over the tenant file.
+  const fflag = env.SECONDSHIFT_POST_FOLLOWUPS;
+  const followups = fflag === undefined || fflag === '' ? t.post_followups === true : /^(1|true|on|yes)$/i.test(fflag);
+  return { post_to_silicon: on, post_followups: on && followups, url: env.SILICON_URL || t.url || null };
 }
 
 module.exports = { lintTenant, loadTenants, loadSecrets, siliconSettings, AI_WORDS };
