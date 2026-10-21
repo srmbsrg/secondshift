@@ -14,17 +14,10 @@ const { loadTenants, loadSecrets, siliconSettings } = require('./config');
 const { createSiliconClient, siliconCalendar } = require('./integrations/silicon');
 const { createTts } = require('./brain/tts-deepgram');
 const { openDeepgramStream } = require('./brain/stt-deepgram');
-const { createLlm } = require('./brain/llm');
+const { createRoutersFromEnv } = require('./brain/router');
 const { createTelegram } = require('./notify/telegram');
 const { createLeads } = require('./leads');
 const { createChat } = require('./chat');
-// Brain selection: SECONDSHIFT_LLM_PROVIDER wins; otherwise Claude when an Anthropic key exists,
-// then Abacus.AI RouteLLM, then any OpenAI-compatible key, else rules only.
-function createLlmFromEnv(env, secrets) {
-  const provider = env.SECONDSHIFT_LLM_PROVIDER || (secrets.anthropicKey ? 'anthropic' : secrets.abacusKey ? 'abacus' : secrets.llmKey ? 'openai' : 'none');
-  const apiKey = { anthropic: secrets.anthropicKey, abacus: secrets.abacusKey }[provider] || secrets.llmKey;
-  return createLlm({ provider, baseUrl: env.SECONDSHIFT_LLM_BASE_URL, model: env.SECONDSHIFT_LLM_MODEL, apiKey, timeoutMs: +env.SECONDSHIFT_LLM_TIMEOUT_MS || undefined, reasoningEffort: env.SECONDSHIFT_LLM_REASONING });
-}
 const { createGoogleAuth } = require('./google/auth');
 const { googleCalendar, fileCalendar } = require('./booking/calendar');
 const { gmailMailer, fileMailer, resendMailer } = require('./notify/email');
@@ -68,7 +61,6 @@ function createServer(opts = {}) {
     : (google && (google.scopes || []).some(s => /gmail\.send/.test(s))
       ? gmailMailer({ auth: google, from: (firstTenant && firstTenant.owner && firstTenant.owner.email) || 'me' })
       : fileMailer({ dir: path.join(dataDir, 'outbox') })));
-  const llm = opts.llm !== undefined ? opts.llm : createLlmFromEnv(env, secrets);
   const tts = opts.tts || (secrets.deepgramKey ? createTts({ apiKey: secrets.deepgramKey, model: (firstTenant && firstTenant.voice && firstTenant.voice.ttsModel) || undefined }) : null);
   const openStt = opts.openStt || (o => openDeepgramStream({ apiKey: secrets.deepgramKey, ...o }));
 
@@ -85,11 +77,17 @@ function createServer(opts = {}) {
   const records = [];
   // Call alerts to the owner's Telegram (start + end of every call). SECONDSHIFT_TELEGRAM=off disables (tests).
   const telegram = opts.telegram !== undefined ? opts.telegram : (env.SECONDSHIFT_TELEGRAM === 'off' ? null : createTelegram({ token: secrets.telegramToken, chatId: secrets.telegramChatId }));
+  // Model router (brain/router.js): local/free models first, paid fallback behind a monthly budget cap,
+  // Telegram alert when a paid provider runs out of credit. One router per task (phone call, site chat).
+  // AI alerts use the owner's Telegram channel (SECONDSHIFT_AI_ALERTS=off silences them, =on forces them).
+  const aiTelegram = opts.aiTelegram !== undefined ? opts.aiTelegram : (env.SECONDSHIFT_AI_ALERTS === 'off' ? null : telegram || (env.SECONDSHIFT_AI_ALERTS === 'on' ? createTelegram({ token: secrets.telegramToken, chatId: secrets.telegramChatId }) : null));
+  const ai = createRoutersFromEnv(env, secrets, { telegram: aiTelegram, dataDir, now: opts.now });
+  const llm = opts.llm !== undefined ? opts.llm : ai.call;
   const leads = createLeads({ dataDir, telegram, mailer, ownerEmail: env.SECONDSHIFT_LEADS_EMAIL || (firstTenant && firstTenant.owner && firstTenant.owner.email) });
   // Browsers may post leads only from the Carborundum site.
   const LEAD_ORIGINS = (env.SECONDSHIFT_LEAD_ORIGINS || 'https://carborundum.ai,https://www.carborundum.ai').split(',');
   // Website helper: same brain, same lead store. SECONDSHIFT_CHAT=off disables it.
-  const chat = opts.chat !== undefined ? opts.chat : (env.SECONDSHIFT_CHAT === 'off' ? null : createChat({ llm: opts.chatLlm !== undefined ? opts.chatLlm : llm, leads }));
+  const chat = opts.chat !== undefined ? opts.chat : (env.SECONDSHIFT_CHAT === 'off' ? null : createChat({ llm: opts.chatLlm !== undefined ? opts.chatLlm : (opts.llm !== undefined ? opts.llm : ai.chat), leads }));
   const deps = { tts, openStt, calendar, mailer, llm, telegram, silicon, siliconFollowups, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
@@ -128,7 +126,7 @@ function createServer(opts = {}) {
       if (req.method === 'GET' && url.pathname === '/health') {
         return send(200, {
           ok: !!tts && Object.keys(tenants).length > 0, tenants: Object.keys(tenants), tenantProblems: problems,
-          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? `${llm.provider}:${llm.model}` : 'off (rules only)', calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
+          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? (llm.chain ? llm.chain.join(' -> ') : `${llm.provider}:${llm.model}`) : 'off (rules only)', ai: { call: ai.call ? ai.call.status() : 'rules only', chat: ai.chat ? ai.chat.status() : 'canned answers only', budget: ai.budget.state() }, calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
         });
       }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {
