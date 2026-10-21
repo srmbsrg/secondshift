@@ -53,6 +53,28 @@ const LIMITS = {
   perIpPerDay: 120,
 };
 
+// Canned answers built only from FACTS above, used when no model can answer (provider out of credit,
+// over the monthly AI budget, or down). Keyword-matched on the visitor's latest message.
+const FALLBACK = {
+  price: 'SecondShift is $59.99 a month after a free first month (about $2 a day), billed monthly through Stripe. You can start with the "Get SecondShift — first month free" button on carborundum.ai/secondshift.',
+  demo: 'Call (346) 220-4138 any time to hear SecondShift answer a call for a demo shop (no technician is sent).',
+  calendar: 'SecondShift keeps the schedule itself and sends you every booking. It does not sync into your own Google or Outlook calendar yet — that is the next thing being added.',
+  emergency: 'For emergencies like a gas smell or a burst pipe, SecondShift can ring your on-call phone instead of booking for the morning — you set the rules.',
+  later: 'Carbon (a field app for techs) and Silicon (an office / operations system) are in progress, not finished products yet. Leave your details and the team will keep you posted.',
+  what: 'SecondShift is an AI voice agent that answers your shop\'s calls when nobody can — nights, weekends, holidays, or when the crew is on a job. It gets the problem, name and address, books a time, and alerts you.',
+  default: 'I can\'t pull up a full answer right this second, but here\'s the short version: SecondShift answers your shop\'s calls after hours, books the job, and alerts you — $59.99 a month after a free first month. Call (346) 220-4138 to hear it, or use the form on this page and the team will reach out.',
+};
+function fallbackReply(clean) {
+  const last = String(((clean || []).filter(m => m.role === 'user').pop() || {}).content || '').toLowerCase();
+  if (/(price|cost|how much|\$|per month|a month|pricing|plan|trial|free)/.test(last)) return FALLBACK.price;
+  if (/(calendar|google|outlook|sync)/.test(last)) return FALLBACK.calendar;
+  if (/(demo|hear it|try it|test it|phone number|call you)/.test(last)) return FALLBACK.demo;
+  if (/(emergenc|gas|burst|flood|on-call|on call)/.test(last)) return FALLBACK.emergency;
+  if (/(carbon|silicon)/.test(last)) return FALLBACK.later;
+  if (/(what is|what does|how does|secondshift|second shift)/.test(last)) return FALLBACK.what;
+  return FALLBACK.default;
+}
+
 function createChat({ llm, leads, limits = {}, now = () => Date.now() }) {
   const L = { ...LIMITS, ...limits };
   const byIp = new Map();       // ip -> {min:[ts...], day:[ts...]}
@@ -88,13 +110,15 @@ function createChat({ llm, leads, limits = {}, now = () => Date.now() }) {
       if (userTurns > L.convoTurns) {
         return { status: 200, body: { ok: true, reply: 'We’ve covered a lot here! For anything else, call (346) 220-4138 to hear SecondShift, or leave your details and the team will reach out.', capped: true } };
       }
-      if (!llm || !llm.chatJson) return { status: 503, body: { ok: false, error: 'The helper is offline right now. Call (346) 220-4138 or use the form on the page.' } };
+      // No brain configured, or every model in the chain failed / is over budget: answer from the
+      // fixed FACTS instead of erroring (the bubble never shows a 502 because a provider ran dry).
+      if (!llm || !llm.chatJson) return { status: 200, body: { ok: true, reply: fallbackReply(clean), fallback: true } };
 
       let history = clean.slice(-L.historyTurns);
       while (history.length && history[0].role !== 'user') history = history.slice(1); // model APIs want user first
       const j = await llm.chatJson(SYSTEM, history, { maxTokens: L.maxTokens });
       const reply = j && typeof j.reply === 'string' && j.reply.trim() ? j.reply.trim().slice(0, 1500) : null;
-      if (!reply) return { status: 502, body: { ok: false, error: 'Sorry — I couldn’t answer that just now. Try again, or call (346) 220-4138.' } };
+      if (!reply) return { status: 200, body: { ok: true, reply: fallbackReply(clean), fallback: true } };
 
       let leadId = null;
       const convo = String((body && body.conversationId) || '').slice(0, 64);
@@ -119,4 +143,4 @@ function createChat({ llm, leads, limits = {}, now = () => Date.now() }) {
   };
 }
 
-module.exports = { createChat, SYSTEM, LIMITS };
+module.exports = { createChat, SYSTEM, LIMITS, FALLBACK, fallbackReply };
