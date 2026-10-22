@@ -7,7 +7,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/unit.test.js test/silicon.test.js test/router.test.js",
+    "test": "node --test test/unit.test.js test/silicon.test.js test/router.test.js test/slack.test.js",
     "e2e": "node test/e2e-sim.js",
     "twilio-wire": "node tools/twilio-wire.js",
     "pilot": "node tools/live-pilot.js",
