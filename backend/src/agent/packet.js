@@ -106,7 +106,7 @@ function buildPacket({ id, needsInput, testDrive, receipt, principal, base, now 
 }
 
 function packetPdf(p) {
-  const B = [], h = (text) => B.push({ text, size: 10.5, bold: true, gap: 7, color: [0.05, 0.2, 0.4] }), t = (text, o = {}) => B.push({ text, size: 8.3, ...o });
+  const B = [], h = (text) => B.push({ text, size: 10.5, bold: true, gap: 5, color: [0.05, 0.2, 0.4] }), t = (text, o = {}) => B.push({ text, size: 8.3, ...o });
   B.push({ text: 'SecondShift - decision packet', size: 17, bold: true });
   t(`Carborundum AI | ${p.shop.label} | packet ${p.id} v${p.version} | ${p.generated_at.replace('T', ' ').slice(0, 16)} UTC`, { color: [0.35, 0.35, 0.35], rule: true });
   h('Fit to the needs you sent');
@@ -115,11 +115,12 @@ function packetPdf(p) {
   const td = p.test_drive;
   if (td && td.transcript) {
     t(`Call ${td.call_ref}, ${String(td.started_at).replace('T', ' ').slice(0, 16)} UTC. Caller: ${td.caller}. Outcome: ${td.outcome}${td.booking && td.booking.when ? ', booked ' + td.booking.when : ''}. Audio stored: ${td.audio_stored ? 'yes' : 'no'}.`);
-    for (const l of td.transcript.slice(0, 16)) t(`${l.who}: ${l.text}`, { indent: 10, size: 7.6 });
-    if (td.transcript.length > 16) t(`... ${td.transcript.length - 16} more lines in the JSON packet.`, { indent: 10, size: 7.6 });
+    for (const l of td.transcript.slice(0, 16)) t(`${l.who}: ${l.text}`, { indent: 10, size: 7.2 });
+    if (td.transcript.length > 16) t(`... ${td.transcript.length - 16} more lines in the JSON packet.`, { indent: 10, size: 7.2 });
   } else t(td.status + '. ' + td.how);
   h('Verified facts');
-  for (const f of p.verified_facts) t(`- ${f.claim} (${f.source.replace('https://', '')})`);
+  for (const f of p.verified_facts) t(`- ${f.claim}`);
+  t(`Sources: ${p.links.product.replace('https://', '')} | ${p.links.llms_txt.replace('https://', '')} | ${p.links.agents.replace('https://', '')}`, { color: [0.35, 0.35, 0.35] });
   h('Security and data handling');
   for (const s of p.security_and_data_handling) t('- ' + s);
   h('Price quote (USD)');
