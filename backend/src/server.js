@@ -22,6 +22,7 @@ const { createChat } = require('./chat');
 const { createGoogleAuth } = require('./google/auth');
 const { googleCalendar, fileCalendar } = require('./booking/calendar');
 const { gmailMailer, fileMailer, resendMailer } = require('./notify/email');
+const { createAgentApi } = require('./agent/api');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -102,6 +103,9 @@ function createServer(opts = {}) {
   // Team alert: every real inbound call (not Scott's test numbers) -> Slack #agents via incoming webhook.
   // Off unless SLACK_AGENTS_WEBHOOK_URL is set; SECONDSHIFT_SLACK_EXCLUDE = comma list of test numbers.
   const slack = opts.slack !== undefined ? opts.slack : createSlack({ webhookUrl: env.SLACK_AGENTS_WEBHOOK_URL, exclude: env.SECONDSHIFT_SLACK_EXCLUDE });
+  // Agent door (demo shop only): decision packet, test-drive, Stripe TEST checkout, MCP. SECONDSHIFT_AGENT=off disables.
+  const agentApi = opts.agentApi !== undefined ? opts.agentApi : (env.SECONDSHIFT_AGENT === 'off' ? null
+    : createAgentApi({ dataDir, env, secrets, tts, demoTenant: env.SECONDSHIFT_DEMO_TENANT || (firstTenant && firstTenant.id), fetchImpl: opts.fetch || fetch, runCall: opts.agentRunCall }));
   const deps = { tts, openStt, calendar, mailer, llm, telegram, slack, silicon, siliconFollowups, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
@@ -160,6 +164,7 @@ function createServer(opts = {}) {
         const base = publicBase(req), wsBase = base.replace(/^http/, 'ws');
         return send(200, twilio.answerTwiml({ wsUrl: `${wsBase}/media/twilio`, afterUrl: `${base}/voice/twilio/after?tenant=${encodeURIComponent(tenantId)}`, tenant: tenantId, from: p.From, callSid: p.CallSid }), 'text/xml');
       }
+      if (agentApi && (url.pathname === '/agent' || url.pathname.startsWith('/agent/'))) return await agentApi.handle(req, res, url);
       return send(404, { error: 'not found' });
     } catch (e) { return send(500, { error: e.message }); }
   });
