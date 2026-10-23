@@ -147,6 +147,15 @@ class CallSession {
     tg.send(text).then(() => this._log('alert', 'sent')).catch(e => { this._log('error', 'telegram: ' + e.message); live(this.callSid, 'alert', 'FAILED: ' + e.message); });
   }
 
+  /** Fire-and-forget Slack #agents post for a real (non-test) caller; failures go to the call log. */
+  _slack(rec) {
+    const sl = this.deps.slack; if (!sl) return;
+    if (/^CApilotselftest/.test(this.callSid || '') || !sl.shouldPost(rec.from)) return;
+    const text = `:telephone_receiver: *Real inbound call* on the ${this.tenant.shopName} line from ${rec.from}\n`
+      + '```' + callSummary(rec, this.tenant) + '```\nFollow up within the hour.';
+    sl.send(text).then(() => this._log('slack', 'sent')).catch(e => this._log('error', 'slack: ' + e.message));
+  }
+
   _t() { return Date.now() - this.startedAt.getTime(); }
   _log(type, data) { (this.events || (this.events = [])).push({ at: this._t(), type, data }); live(this.callSid, type, data); }
 
@@ -176,6 +185,7 @@ class CallSession {
     if (rec.storeAudio && this.audioIn.length) fs.writeFileSync(path.join(dir, `${this.callSid}-caller.wav`), encodeWavMulaw(Buffer.concat(this.audioIn)));
     live(this.callSid, 'END', { outcome: rec.outcome, endAction, booking: rec.booking && rec.booking.when, calendar: rec.booking && rec.booking.calendar });
     this._alert(callSummary(rec, this.tenant));
+    this._slack(rec);
     await this._postToSilicon(rec, sum).catch(e => live(this.callSid, 'silicon', 'FAILED: ' + e.message));
     await this._postFollowUp(rec).catch(e => live(this.callSid, 'silicon-followup', 'FAILED: ' + e.message));
     try { await this._email(rec); live(this.callSid, 'email', 'sent'); } catch (e) { live(this.callSid, 'email', 'FAILED: ' + e.message); fs.appendFileSync(path.join(dir, 'errors.log'), `${new Date().toISOString()} email: ${e.message}\n`); }

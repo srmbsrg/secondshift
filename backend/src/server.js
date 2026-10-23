@@ -16,6 +16,7 @@ const { createTts } = require('./brain/tts-deepgram');
 const { openDeepgramStream } = require('./brain/stt-deepgram');
 const { createRoutersFromEnv } = require('./brain/router');
 const { createTelegram } = require('./notify/telegram');
+const { createSlack } = require('./notify/slack');
 const { createLeads } = require('./leads');
 const { createChat } = require('./chat');
 const { createGoogleAuth } = require('./google/auth');
@@ -88,7 +89,10 @@ function createServer(opts = {}) {
   const LEAD_ORIGINS = (env.SECONDSHIFT_LEAD_ORIGINS || 'https://carborundum.ai,https://www.carborundum.ai').split(',');
   // Website helper: same brain, same lead store. SECONDSHIFT_CHAT=off disables it.
   const chat = opts.chat !== undefined ? opts.chat : (env.SECONDSHIFT_CHAT === 'off' ? null : createChat({ llm: opts.chatLlm !== undefined ? opts.chatLlm : (opts.llm !== undefined ? opts.llm : ai.chat), leads }));
-  const deps = { tts, openStt, calendar, mailer, llm, telegram, silicon, siliconFollowups, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
+  // Team alert: every real inbound call (not Scott's test numbers) -> Slack #agents via incoming webhook.
+  // Off unless SLACK_AGENTS_WEBHOOK_URL is set; SECONDSHIFT_SLACK_EXCLUDE = comma list of test numbers.
+  const slack = opts.slack !== undefined ? opts.slack : createSlack({ webhookUrl: env.SLACK_AGENTS_WEBHOOK_URL, exclude: env.SECONDSHIFT_SLACK_EXCLUDE });
+  const deps = { tts, openStt, calendar, mailer, llm, telegram, slack, silicon, siliconFollowups, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
   const readBody = req => new Promise(r => { let b = ''; req.on('data', c => (b += c)); req.on('end', () => r(b)); });
@@ -126,7 +130,7 @@ function createServer(opts = {}) {
       if (req.method === 'GET' && url.pathname === '/health') {
         return send(200, {
           ok: !!tts && Object.keys(tenants).length > 0, tenants: Object.keys(tenants), tenantProblems: problems,
-          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? (llm.chain ? llm.chain.join(' -> ') : `${llm.provider}:${llm.model}`) : 'off (rules only)', ai: { call: ai.call ? ai.call.status() : 'rules only', chat: ai.chat ? ai.chat.status() : 'canned answers only', budget: ai.budget.state() }, calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
+          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? (llm.chain ? llm.chain.join(' -> ') : `${llm.provider}:${llm.model}`) : 'off (rules only)', ai: { call: ai.call ? ai.call.status() : 'rules only', chat: ai.chat ? ai.chat.status() : 'canned answers only', budget: ai.budget.state() }, calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', slackCallAlerts: slack ? 'on' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
         });
       }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {
