@@ -35,9 +35,13 @@ const dialTwiml = number => `<?xml version="1.0" encoding="UTF-8"?><Response><Di
 const hangupTwiml = () => `<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`;
 const sayHangupTwiml = text => `<?xml version="1.0" encoding="UTF-8"?><Response><Say>${xmlEsc(text)}</Say><Hangup/></Response>`;
 
-/** X-Twilio-Signature check (HMAC-SHA1 of full URL + sorted POST params). Only enforced when an auth token is configured. */
-function validSignature(authToken, signature, url, params) {
-  if (!authToken) return true;
+/**
+ * X-Twilio-Signature check (HMAC-SHA1 of full URL + sorted POST params).
+ * Fails CLOSED: with no auth token configured every request is rejected, unless the caller passes
+ * { allowUnsigned: true } (local dev only, via SECONDSHIFT_ALLOW_UNSIGNED_TWILIO=1; never in production).
+ */
+function validSignature(authToken, signature, url, params, opts = {}) {
+  if (!authToken) return !!opts.allowUnsigned;
   const data = url + Object.keys(params).sort().map(k => k + params[k]).join('');
   const expected = crypto.createHmac('sha1', authToken).update(Buffer.from(data, 'utf8')).digest('base64');
   try { return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(signature || ''))); } catch { return false; }
