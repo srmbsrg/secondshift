@@ -28,6 +28,16 @@ const ROOT = path.join(__dirname, '..');
 function createServer(opts = {}) {
   const env = opts.env || process.env;
   const secrets = opts.secrets || loadSecrets(env);
+  // Local dev escape hatch only: production must have TWILIO_AUTH_TOKEN, otherwise /voice/twilio rejects everything.
+  const ALLOW_UNSIGNED_TWILIO = env.SECONDSHIFT_ALLOW_UNSIGNED_TWILIO === '1';
+  if (!secrets.twilioAuthToken) console.warn(ALLOW_UNSIGNED_TWILIO ? 'WARNING: no TWILIO_AUTH_TOKEN and SECONDSHIFT_ALLOW_UNSIGNED_TWILIO=1 - unsigned Twilio webhooks ACCEPTED (dev only)' : 'WARNING: no TWILIO_AUTH_TOKEN - all /voice/twilio requests will be rejected (fail closed)');
+  const healthToken = env.HEALTH_TOKEN || secrets.siliconToken || '';
+  const healthAuthorized = req => {
+    if (!healthToken) return false;
+    const got = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const a = Buffer.from(got), b = Buffer.from(healthToken);
+    return a.length === b.length && require('crypto').timingSafeEqual(a, b);
+  };
   const { tenants, problems } = loadTenants(opts.tenantDir || path.join(ROOT, 'tenants'));
   const dataDir = opts.dataDir || env.SECONDSHIFT_DATA_DIR || path.join(ROOT, 'data');
   const firstTenant = Object.values(tenants)[0];
@@ -128,6 +138,10 @@ function createServer(opts = {}) {
         } catch (e) { console.error('lead store failed', e); return send(500, { ok: false, error: 'Could not save your request — please call or try again.' }); }
       }
       if (req.method === 'GET' && url.pathname === '/health') {
+        // Public callers get liveness only. Module/config detail needs Authorization: Bearer <HEALTH_TOKEN>
+        // (falls back to the Silicon integration token so ops tooling works without a new secret).
+        const healthOk = !!tts && Object.keys(tenants).length > 0;
+        if (!healthAuthorized(req)) return send(200, { ok: healthOk });
         return send(200, {
           ok: !!tts && Object.keys(tenants).length > 0, tenants: Object.keys(tenants), tenantProblems: problems,
           modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? (llm.chain ? llm.chain.join(' -> ') : `${llm.provider}:${llm.model}`) : 'off (rules only)', ai: { call: ai.call ? ai.call.status() : 'rules only', chat: ai.chat ? ai.chat.status() : 'canned answers only', budget: ai.budget.state() }, calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', slackCallAlerts: slack ? 'on' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
@@ -135,7 +149,7 @@ function createServer(opts = {}) {
       }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {
         const raw = await readBody(req); const p = Object.fromEntries(new URLSearchParams(raw));
-        if (!twilio.validSignature(secrets.twilioAuthToken, req.headers['x-twilio-signature'], publicBase(req) + req.url, p)) return send(403, 'bad signature', 'text/plain');
+        if (!twilio.validSignature(secrets.twilioAuthToken, req.headers['x-twilio-signature'], publicBase(req) + req.url, p, { allowUnsigned: ALLOW_UNSIGNED_TWILIO })) return send(403, 'bad signature', 'text/plain');
         const tenantId = url.searchParams.get('tenant') || (firstTenant && firstTenant.id);
         if (url.pathname === '/voice/twilio/after') {
           const end = endActions.get(p.CallSid); endActions.delete(p.CallSid);

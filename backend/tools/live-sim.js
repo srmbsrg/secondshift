@@ -33,7 +33,7 @@ function twilioPost(token, url, params) {
 async function main() {
   const secrets = loadSecrets();
   if (!secrets.deepgramKey || !secrets.twilioAuthToken) throw new Error('needs Deepgram key + Twilio auth token in the secrets dir');
-  const health = await (await fetch(BASE + '/health')).json();
+  const health = await (await fetch(BASE + '/health', { headers: secrets.siliconToken ? { authorization: 'Bearer ' + (process.env.HEALTH_TOKEN || secrets.siliconToken) } : {} })).json();
   console.log('[live] health ok=%s llm=%s', health.ok, health.modules && health.modules.llm);
   const callSid = 'CA' + crypto.randomBytes(16).toString('hex'), from = '+17135550148';
   const twiml = await (await twilioPost(secrets.twilioAuthToken, `${BASE}/voice/twilio?tenant=${TENANT}`, { CallSid: callSid, From: from, To: '+13462204138' })).text();

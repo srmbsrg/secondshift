@@ -104,7 +104,7 @@ async function main() {
   await new Promise(r => server.listen(0, r));
   const port = server.address().port, base = `http://127.0.0.1:${port}`;
   console.log(`[sim] server :${port}  data: ${work}`);
-  console.log('[sim] health:', JSON.stringify((await (await fetch(base + '/health')).json()).modules));
+  console.log('[sim] health:', JSON.stringify((await (await fetch(base + '/health', { headers: { authorization: 'Bearer ' + (secrets.siliconToken || '') } })).json()).modules));
 
   // 1) Twilio webhook: an inbound call arrives.
   const callSid = 'CA' + Math.random().toString(16).slice(2).padEnd(32, '0').slice(0, 32), from = '+17135550148';
