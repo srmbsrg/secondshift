@@ -23,7 +23,8 @@ const fs = require('fs'), path = require('path');
 const { BookingAgent } = require('../brain/agent');
 const { createScheduler } = require('../booking/scheduler');
 const { encodeWavMulaw } = require('./wav');
-const { callSummaryText, followUpPayload } = require('../integrations/silicon');
+const { callSummaryText, followUpPayload, salesLeadPayload } = require('../integrations/silicon');
+const { isRealCaller, parseExclude } = require('../notify/slack');
 
 class CallSession {
   /**
@@ -188,6 +189,7 @@ class CallSession {
     this._slack(rec);
     await this._postToSilicon(rec, sum).catch(e => live(this.callSid, 'silicon', 'FAILED: ' + e.message));
     await this._postFollowUp(rec).catch(e => live(this.callSid, 'silicon-followup', 'FAILED: ' + e.message));
+    await this._postSalesLead(rec).catch(e => live(this.callSid, 'silicon-saleslead', 'FAILED: ' + e.message));
     try { await this._email(rec); live(this.callSid, 'email', 'sent'); } catch (e) { live(this.callSid, 'email', 'FAILED: ' + e.message); fs.appendFileSync(path.join(dir, 'errors.log'), `${new Date().toISOString()} email: ${e.message}\n`); }
     this.record = rec;
     if (this.deps.onRecord) this.deps.onRecord(rec);
@@ -230,6 +232,22 @@ class CallSession {
     if (!payload) return;
     try { await silicon.postFollowUp(payload); live(this.callSid, 'silicon-followup', `${payload.kind} posted`); }
     catch (e) { if (!e.disabled) silicon.enqueue(payload, e.message, 'followup'); throw e; }
+  }
+
+  /**
+   * Sales CRM flag only (default OFF): a real caller on the demo line becomes a lead in Carborundum's
+   * own Silicon pipeline. Same exclusions as the Slack alert (Scott's test phone, sim/self-test calls).
+   */
+  async _postSalesLead(rec) {
+    const silicon = this.deps.silicon;
+    if (!silicon || !this.deps.siliconSalesLeads || !silicon.postSalesLead) return;
+    if (!this.deps.salesLeadTenants || !this.deps.salesLeadTenants.has(String(this.tenant.id || '').toLowerCase())) return;
+    if (/^CApilotselftest/.test(this.callSid || '')) return;
+    if (!isRealCaller(this.from, parseExclude(process.env.SECONDSHIFT_SLACK_EXCLUDE))) return;
+    const payload = salesLeadPayload({ callSid: this.callSid, from: this.from, outcome: rec.outcome, slots: rec.slots, emergency: rec.emergency });
+    if (!payload) return;
+    try { await silicon.postSalesLead(payload); live(this.callSid, 'silicon-saleslead', 'lead posted'); }
+    catch (e) { if (!e.disabled && e.status !== 401 && e.status !== 403) silicon.enqueue(payload, e.message, 'saleslead'); throw e; }
   }
 
   async _email(rec) {

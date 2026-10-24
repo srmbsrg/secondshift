@@ -40,6 +40,8 @@ function createSiliconClient({ url, token, fetchImpl = fetch, timeoutMs = 4000, 
   }
   const postJob = payload => postWithRetry('/api/integrations/secondshift/jobs', payload);
   const postFollowUp = payload => postWithRetry('/api/integrations/secondshift/followups', payload);
+  // Carborundum's own sales CRM: a real caller on the DEMO line is a sales lead (Silicon dedupes by phone).
+  const postSalesLead = payload => postWithRetry('/api/integrations/sales/leads', payload);
 
   function enqueue(payload, reason, kind = 'job') {
     if (!outboxFile) return;
@@ -54,7 +56,7 @@ function createSiliconClient({ url, token, fetchImpl = fetch, timeoutMs = 4000, 
     const keep = []; let sent = 0;
     for (const l of lines) {
       let item; try { item = JSON.parse(l); } catch { continue; }
-      try { await (item.kind === 'followup' ? postFollowUp : postJob)(item.payload); sent++; } catch (e) { if (retryable(e)) keep.push(l); else log('silicon outbox drop', e.message); }
+      try { await (item.kind === 'followup' ? postFollowUp : item.kind === 'saleslead' ? postSalesLead : postJob)(item.payload); sent++; } catch (e) { if (retryable(e)) keep.push(l); else log('silicon outbox drop', e.message); }
     }
     fs.writeFileSync(outboxFile, keep.length ? keep.join('\n') + '\n' : '');
     return { sent, kept: keep.length };
@@ -65,7 +67,22 @@ function createSiliconClient({ url, token, fetchImpl = fetch, timeoutMs = 4000, 
     return (j.busy || []).map(b => ({ start: new Date(b.start), end: new Date(b.end) }));
   }
 
-  return { url: base, postJob, postFollowUp, availability, enqueue, flushOutbox };
+  return { url: base, postJob, postFollowUp, postSalesLead, availability, enqueue, flushOutbox };
+}
+
+/**
+ * Sales-lead post for a real call on the demo line (event "call" on Silicon's sales CRM). Null when the
+ * caller ID is not a real 10-digit number. The caller's phone is the key; names said on a demo call are
+ * often role-play, so they only go in the note.
+ */
+function salesLeadPayload({ callSid, from, outcome, slots = {}, emergency }) {
+  const d = String(from || '').replace(/\D/g, '').slice(-10);
+  if (d.length !== 10) return null;
+  return {
+    event: 'call', externalRef: `secondshift:${callSid}:saleslead`,
+    lead: { phone: from, source: 'secondshift-demo-line' },
+    text: `Called the SecondShift demo line (346) 220-4138. ${callSummaryText({ slots, outcome, emergency, from })}`,
+  };
 }
 
 /** Plain-English call summary for the job card in Silicon / Carbon. */
@@ -138,4 +155,4 @@ function followUpPayload({ callSid, tenantId, from, outcome, slots = {}, emergen
   };
 }
 
-module.exports = { createSiliconClient, siliconCalendar, callSummaryText, followUpPayload };
+module.exports = { createSiliconClient, siliconCalendar, callSummaryText, followUpPayload, salesLeadPayload };

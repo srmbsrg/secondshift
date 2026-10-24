@@ -58,6 +58,11 @@ function createServer(opts = {}) {
   }
   if (silicon) siliconStatus = `on:${silicon.url}`;
   const siliconFollowups = !!silicon && (opts.siliconFollowups !== undefined ? !!opts.siliconFollowups : sil.post_followups);
+  // Carborundum sales CRM (default OFF): real callers on the listed tenants' lines (the demo line) become
+  // Silicon sales leads. SILICON_SALES_LEADS=on; SILICON_SALES_LEAD_TENANTS defaults to the demo shop only,
+  // so a paying shop's customers can never land in Carborundum's pipeline.
+  const siliconSalesLeads = !!silicon && (opts.siliconSalesLeads !== undefined ? !!opts.siliconSalesLeads : env.SILICON_SALES_LEADS === 'on');
+  const salesLeadTenants = new Set(String(env.SILICON_SALES_LEAD_TENANTS || 'carborundum').split(',').map(x => x.trim().toLowerCase()).filter(Boolean));
   const calendar = silicon ? siliconCalendar({ client: silicon, fallback: ownCalendar, tenant: firstTenant, log: (...a) => console.error(...a) }) : ownCalendar;
   if (silicon && opts.siliconFlushMs !== 0) {
     const h = setInterval(() => silicon.flushOutbox().catch(() => {}), opts.siliconFlushMs || 60_000); if (h.unref) h.unref();
@@ -106,7 +111,7 @@ function createServer(opts = {}) {
   // Agent door (demo shop only): decision packet, test-drive, Stripe TEST checkout, MCP. SECONDSHIFT_AGENT=off disables.
   const agentApi = opts.agentApi !== undefined ? opts.agentApi : (env.SECONDSHIFT_AGENT === 'off' ? null
     : createAgentApi({ dataDir, env, secrets, tts, demoTenant: env.SECONDSHIFT_DEMO_TENANT || (firstTenant && firstTenant.id), fetchImpl: opts.fetch || fetch, runCall: opts.agentRunCall }));
-  const deps = { tts, openStt, calendar, mailer, llm, telegram, slack, silicon, siliconFollowups, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
+  const deps = { tts, openStt, calendar, mailer, llm, telegram, slack, silicon, siliconFollowups, siliconSalesLeads, salesLeadTenants, logDir: path.join(dataDir, 'logs'), now: opts.now, onRecord: r => records.push(r) };
 
   const publicBase = req => env.PUBLIC_BASE_URL || `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
   const readBody = req => new Promise(r => { let b = ''; req.on('data', c => (b += c)); req.on('end', () => r(b)); });
@@ -148,7 +153,7 @@ function createServer(opts = {}) {
         if (!healthAuthorized(req)) return send(200, { ok: healthOk });
         return send(200, {
           ok: !!tts && Object.keys(tenants).length > 0, tenants: Object.keys(tenants), tenantProblems: problems,
-          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? (llm.chain ? llm.chain.join(' -> ') : `${llm.provider}:${llm.model}`) : 'off (rules only)', ai: { call: ai.call ? ai.call.status() : 'rules only', chat: ai.chat ? ai.chat.status() : 'canned answers only', budget: ai.budget.state() }, calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', slackCallAlerts: slack ? 'on' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
+          modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? (llm.chain ? llm.chain.join(' -> ') : `${llm.provider}:${llm.model}`) : 'off (rules only)', ai: { call: ai.call ? ai.call.status() : 'rules only', chat: ai.chat ? ai.chat.status() : 'canned answers only', budget: ai.budget.state() }, calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', siliconSalesLeads: siliconSalesLeads ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', slackCallAlerts: slack ? 'on' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
         });
       }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {
