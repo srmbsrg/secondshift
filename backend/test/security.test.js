@@ -47,3 +47,16 @@ test('server: /health public = liveness only; detail needs bearer token', async 
     assert.ok(full.modules && 'twilioSignatureCheck' in full.modules);
   });
 });
+
+test('server: /shop/status needs the bearer token, returns settings without secrets', async () => {
+  await withServer({ secrets: { siliconToken: 'sekrit' }, env: {} }, async base => {
+    assert.equal((await fetch(base + '/shop/status?tenant=carborundum')).status, 401);
+    assert.equal((await fetch(base + '/shop/status?tenant=carborundum', { headers: { authorization: 'Bearer nope' } })).status, 401);
+    assert.equal((await fetch(base + '/shop/status?tenant=nope', { headers: { authorization: 'Bearer sekrit' } })).status, 404);
+    const r = await fetch(base + '/shop/status?tenant=carborundum', { headers: { authorization: 'Bearer sekrit' } });
+    assert.equal(r.status, 200);
+    const j = await r.json(); const raw = JSON.stringify(j);
+    assert.equal(j.shop.id, 'carborundum'); assert.ok(j.shop.hours && j.shop.timezone);
+    assert.ok(!/sekrit|transferNumber|\+1\d{10}|apiKey|token/i.test(raw), 'no secrets or phone numbers');
+  });
+});

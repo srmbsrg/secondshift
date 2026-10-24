@@ -156,6 +156,21 @@ function createServer(opts = {}) {
           modules: { stt: secrets.deepgramKey ? 'deepgram' : 'MISSING KEY', tts: tts ? `deepgram:${tts.model}` : 'MISSING KEY', llm: llm ? (llm.chain ? llm.chain.join(' -> ') : `${llm.provider}:${llm.model}`) : 'off (rules only)', ai: { call: ai.call ? ai.call.status() : 'rules only', chat: ai.chat ? ai.chat.status() : 'canned answers only', budget: ai.budget.state() }, calendar: calendar.kind, silicon: siliconStatus, siliconFollowups: siliconFollowups ? 'on' : 'off', siliconSalesLeads: siliconSalesLeads ? 'on' : 'off', email: mailer.kind, twilioSignatureCheck: secrets.twilioAuthToken ? 'on' : 'off (no auth token)', alerts: telegram ? 'telegram' : 'off', slackCallAlerts: slack ? 'on' : 'off', leadsStore: leads.file, chat: chat ? 'on' : 'off' },
         });
       }
+      if (req.method === 'GET' && url.pathname === '/shop/status') {
+        // Silicon's SecondShift module (read-only, phase 1): one shop's answering settings + module health.
+        // Same bearer as /health detail (HEALTH_TOKEN, else the Silicon integration token). No secrets returned.
+        if (!healthAuthorized(req)) return send(401, { ok: false, error: 'unauthorized' });
+        const t = tenants[String(url.searchParams.get('tenant') || '').toLowerCase()];
+        if (!t) return send(404, { ok: false, error: 'unknown shop' });
+        const ts = siliconSettings(t, env);
+        return send(200, {
+          ok: true,
+          shop: { id: t.id, name: t.shopName, timezone: t.timezone, hours: t.hours, slotMinutes: t.slotMinutes || null, leadMinutes: t.leadMinutes || null, maxCallSeconds: t.maxCallSeconds || null, recording: !!t.recording, disclosure: t.disclosure || null },
+          emergency: t.emergency ? { action: t.emergency.action || null, transfers: !!t.emergency.transferNumber, keywords: Array.isArray(t.emergency.keywords) ? t.emergency.keywords.length : 0 } : null,
+          integrations: { postToSilicon: !!silicon && !!ts.post_to_silicon, followups: siliconFollowups, salesLeads: siliconSalesLeads && salesLeadTenants.has(String(t.id).toLowerCase()) },
+          health: { ok: !!tts, stt: !!secrets.deepgramKey, tts: !!tts, llm: llm ? 'on' : 'rules only', twilioSignatureCheck: !!secrets.twilioAuthToken },
+        });
+      }
       if (req.method === 'POST' && url.pathname.startsWith('/voice/twilio')) {
         const raw = await readBody(req); const p = Object.fromEntries(new URLSearchParams(raw));
         if (!twilio.validSignature(secrets.twilioAuthToken, req.headers['x-twilio-signature'], publicBase(req) + req.url, p, { allowUnsigned: ALLOW_UNSIGNED_TWILIO })) return send(403, 'bad signature', 'text/plain');
